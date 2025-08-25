@@ -1,6 +1,6 @@
 import type { TPublicSnapshot, TPrivateInfo, TChatMsg, TAction } from '@shared/schemas';
 import { Shoe } from './shoe.js';
-import { calculateHandValue, isBust, isBlackjack, determineHandResult, shouldDealerHit, canSplit, canDouble } from './rules.js';
+import { calculateHandValue, isBust, isBlackjack, determineHandResult, shouldDealerHit, canSplit, canDouble, type HandResult } from './rules.js';
 
 export interface Player {
   id: string;
@@ -23,7 +23,7 @@ export interface GameState {
   };
   players: Player[];
   chat: TChatMsg[];
-  phase: 'waiting' | 'dealing' | 'table-talk' | 'decisions' | 'dealer' | 'settling' | 'finished';
+  phase: 'waiting' | 'betting' | 'dealing' | 'table-talk' | 'decisions' | 'dealer' | 'settling' | 'finished';
   currentPlayerIndex: number; // For decision phase
   maxPlayers: number;
 }
@@ -37,9 +37,9 @@ export class TableState {
       shoe: new Shoe(Date.now(), 4),
       dealer: { cards: [], isStanding: false, isBusted: false },
       players: [
-        { id: 'Player 1', seat: 0, cards: [], bet: 100, isStanding: false, isBusted: false, bankroll: 1000 },
-        { id: 'Player 2', seat: 1, cards: [], bet: 100, isStanding: false, isBusted: false, bankroll: 1000 },
-        { id: 'Player 3', seat: 2, cards: [], bet: 100, isStanding: false, isBusted: false, bankroll: 1000 }
+        { id: 'Player 1', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Player 2', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Player 3', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
       ],
       chat: [],
       phase: 'waiting',
@@ -61,7 +61,8 @@ export class TableState {
         seat: player.seat,
         visibleCards: player.cards,
         lastAction: player.lastAction,
-        bet: player.bet
+        bet: player.bet,
+        balance: player.bankroll
       })),
       dealerUpcard,
       chat: this.state.chat
@@ -104,7 +105,7 @@ export class TableState {
   startNewHand(): void {
     // Reset state for new hand
     this.state.handNumber++;
-    this.state.phase = 'dealing';
+    this.state.phase = 'betting'; // Start with betting phase
     this.state.currentPlayerIndex = -1;
     
     // Reset shoe with new seed if needed
@@ -117,9 +118,10 @@ export class TableState {
     this.state.dealer.isStanding = false;
     this.state.dealer.isBusted = false;
     
-    // Reset players
+    // Reset players for new hand but keep bankroll and reset bets
     this.state.players.forEach(player => {
       player.cards = [];
+      player.bet = 0; // Reset bet to 0
       player.isStanding = false;
       player.isBusted = false;
       player.lastAction = undefined;
@@ -127,7 +129,59 @@ export class TableState {
     
     // Clear chat for new hand
     this.state.chat = [];
+  }
+
+  // Place a bet for a player
+  placeBet(seat: number, amount: number): boolean {
+    if (this.state.phase !== 'betting') {
+      return false;
+    }
+
+    const player = this.state.players.find(p => p.seat === seat);
+    if (!player) {
+      return false;
+    }
+
+    // Calculate available balance (current bankroll + current bet, since we'll replace the bet)
+    const availableBalance = player.bankroll + player.bet;
     
+    // Validate bet amount
+    if (amount < 0 || amount > availableBalance || amount > 100) {
+      return false; // Non-negative, can't exceed available balance or $100 max
+    }
+
+    // If player had a previous bet, return it to bankroll
+    if (player.bet > 0) {
+      player.bankroll += player.bet;
+    }
+
+    // Set new bet (but don't deduct from bankroll yet - that happens when dealing starts)
+    player.bet = amount;
+    
+    // Deduct the new bet from bankroll temporarily for betting phase
+    if (amount > 0) {
+      player.bankroll -= amount;
+    }
+
+    return true;
+  }
+
+  // Check if all players have placed valid bets
+  allPlayersHaveBet(): boolean {
+    return this.state.players.every(player => player.bet >= 5);
+  }
+
+  // Start dealing (move from betting to dealing phase)
+  startDealing(): void {
+    if (this.state.phase !== 'betting' || !this.allPlayersHaveBet()) {
+      throw new Error('Cannot start dealing: not in betting phase or not all players have bet');
+    }
+
+    this.state.phase = 'dealing';
+    
+    // Bets are already deducted from bankrolls during placeBet
+    // No need to deduct again
+
     // Deal initial cards
     this.dealInitialCards();
   }
@@ -273,7 +327,7 @@ export class TableState {
 
   // Settle all hands and calculate results
   settleHands(): Array<{ seat: number, result: 'win' | 'lose' | 'push', payout: number }> {
-    const results = [];
+    const results: Array<{ seat: number, result: 'win' | 'lose' | 'push', payout: number }> = [];
     
     for (const player of this.state.players) {
       const result = determineHandResult(player.cards, this.state.dealer.cards);
@@ -281,14 +335,17 @@ export class TableState {
       
       switch (result) {
         case 'win':
-          payout = isBlackjack(player.cards) ? player.bet * 1.5 : player.bet;
-          player.bankroll += payout;
+          // For win: return bet + payout (1:1 for regular win, 1.5:1 for blackjack)
+          payout = isBlackjack(player.cards) ? Math.floor(player.bet * 1.5) : player.bet;
+          player.bankroll += player.bet + payout; // Return bet + winnings
           break;
         case 'lose':
-          payout = -player.bet;
-          player.bankroll -= player.bet;
+          // Bet already deducted during dealing, no additional change needed
+          payout = 0;
           break;
         case 'push':
+          // Return the bet
+          player.bankroll += player.bet;
           payout = 0;
           break;
       }
@@ -328,5 +385,23 @@ export class TableState {
     }
     
     return actions;
+  }
+
+  // Reset entire game state to initial conditions
+  resetEntireGame(): void {
+    this.state = {
+      handNumber: 0,
+      shoe: new Shoe(Date.now(), 4),
+      dealer: { cards: [], isStanding: false, isBusted: false },
+      players: [
+        { id: 'Player 1', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Player 2', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Player 3', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
+      ],
+      chat: [],
+      phase: 'waiting',
+      currentPlayerIndex: -1,
+      maxPlayers: 3
+    };
   }
 }

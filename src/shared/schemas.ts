@@ -9,6 +9,7 @@ export const PublicPlayer = z.object({
   visibleCards: z.array(z.number().int().min(1).max(10)),
   lastAction: Action.optional(),
   bet: z.number().nonnegative().optional(),
+  balance: z.number().nonnegative().optional(),
 });
 
 export const ChatMsg = z.object({ from: z.string(), text: z.string().max(160) });

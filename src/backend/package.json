@@ -3,22 +3,27 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --import ./src/instrumentation.ts src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.62.1",
+    "@opentelemetry/sdk-metrics": "^2.0.1",
+    "@opentelemetry/sdk-node": "^0.203.0",
+    "@opentelemetry/sdk-trace-node": "^2.0.1",
+    "cors": "^2.8.5",
     "express": "^4.19.2",
     "ws": "^8.17.1",
-    "cors": "^2.8.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/ws": "^8.5.10",
     "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
     "@types/node": "^20.12.7",
-    "typescript": "^5.4.5",
-    "tsx": "^4.7.2"
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
   }
 }

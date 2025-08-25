@@ -10,6 +10,7 @@ export interface BackendState {
       visibleCards: number[];
       lastAction?: 'hit' | 'stand' | 'double' | 'split';
       bet?: number;
+      balance?: number;
     }>;
     dealerUpcard: number;
     chat: Array<{ from: string; text: string }>;
@@ -64,6 +65,28 @@ class BackendClient {
     return response.json();
   }
 
+  async placeBet(seat: number, amount: number): Promise<ActionResult> {
+    const response = await fetch(`${this.baseUrl}/api/bet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seat, amount }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to place bet: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async startDealing(): Promise<{ ok: boolean; state: BackendState }> {
+    const response = await fetch(`${this.baseUrl}/api/start-dealing`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to start dealing: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
   async startDecisions(): Promise<{ ok: boolean }> {
     const response = await fetch(`${this.baseUrl}/api/start-decisions`, {
       method: 'POST',
@@ -92,6 +115,16 @@ class BackendClient {
     });
     if (!response.ok) {
       throw new Error(`Failed to play dealer hand: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
+  async resetEntireGame(): Promise<{ success: boolean; message: string; state: BackendState }> {
+    const response = await fetch(`${this.baseUrl}/api/reset`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to reset game: ${response.statusText}`);
     }
     return response.json();
   }

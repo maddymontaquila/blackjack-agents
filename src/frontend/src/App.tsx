@@ -11,8 +11,10 @@ export interface UIPlayer {
   isStanding: boolean;
   isBusted: boolean;
   result?: 'win' | 'lose' | 'push';
-  bet?: number;
+  bet: number;
+  balance: number;
   seat: number;
+  hasBet: boolean;
 }
 
 export interface UIDealer {
@@ -46,16 +48,20 @@ function convertBackendState(backendState: BackendState): UIGameState {
     isBusted: backendState.dealer.isBusted
   };
 
-  const players: UIPlayer[] = backendState.snap.players.map(p => ({
-    name: p.id,
-    hand: valuesToCards(p.visibleCards),
-    handValue: calculateHandValue(p.visibleCards),
-    isStanding: !backendState.seats.find(s => s.seat === p.seat)?.isActive || false,
-    isBusted: calculateHandValue(p.visibleCards) > 21,
-    result: undefined, // Will be set during settling
-    bet: p.bet,
-    seat: p.seat
-  }));
+  const players: UIPlayer[] = backendState.snap.players.map(p => {
+    return {
+      name: p.id,
+      hand: valuesToCards(p.visibleCards),
+      handValue: calculateHandValue(p.visibleCards),
+      isStanding: !backendState.seats.find(s => s.seat === p.seat)?.isActive || false,
+      isBusted: calculateHandValue(p.visibleCards) > 21,
+      result: undefined, // Will be set during settling
+      bet: p.bet || 0, // Backend now manages bets
+      balance: p.balance || 100, // Backend now manages balance
+      seat: p.seat,
+      hasBet: (p.bet || 0) >= 5 // Minimum $5 bet required
+    };
+  });
 
   return {
     dealer,
@@ -100,28 +106,188 @@ function PlayingCard({ card, isHidden = false }: { card: Card; isHidden?: boolea
   );
 }
 
+function Chip({ value, onClick, count = 1 }: { value: number; onClick?: () => void; count?: number }) {
+  const getChipColor = (value: number) => {
+    switch (value) {
+      case 1: return 'chip-white';
+      case 5: return 'chip-red';
+      case 25: return 'chip-green';
+      case 100: return 'chip-black';
+      default: return 'chip-blue';
+    }
+  };
+
+  return (
+    <div 
+      className={`chip ${getChipColor(value)} ${onClick ? 'chip-clickable' : ''}`}
+      onClick={onClick}
+    >
+      <div className="chip-value">${value}</div>
+      {count > 1 && <div className="chip-count">{count}</div>}
+    </div>
+  );
+}
+
+function BettingControls({ 
+  player, 
+  onBetChange, 
+  minBet = 5,
+  isActive = false 
+}: { 
+  player: UIPlayer;
+  onBetChange: (seat: number, newBet: number) => void;
+  minBet?: number;
+  isActive?: boolean;
+}) {
+  const chipValues = [5, 25, 100];
+  // Available balance is current balance + current bet (since bet will be replaced)
+  const availableBalance = player.balance + player.bet;
+  
+  const increaseBet = (amount: number) => {
+    const newBet = Math.min(player.bet + amount, availableBalance);
+    onBetChange(player.seat, newBet);
+  };
+
+  const decreaseBet = (amount: number) => {
+    const newBet = Math.max(player.bet - amount, 0);
+    onBetChange(player.seat, newBet);
+  };
+
+  const setBet = (amount: number) => {
+    const newBet = Math.min(amount, availableBalance);
+    onBetChange(player.seat, newBet);
+  };
+
+  const canBet = isActive && availableBalance >= minBet;
+  const canIncrease = canBet && player.bet < availableBalance;
+  const canDecrease = canBet && player.bet > 0;
+
+  return (
+    <div className="betting-controls">
+      <div className="current-bet">
+        <h4>Current Bet</h4>
+        <div className="bet-chips">
+          {player.bet > 0 ? (
+            <div className="bet-display">
+              <Chip value={player.bet} />
+            </div>
+          ) : (
+            <div className="no-bet">No bet placed</div>
+          )}
+        </div>
+      </div>
+      
+      {canBet && (
+        <div className="betting-actions">
+          <div className="bet-adjustments">
+            <button 
+              className="bet-button decrease" 
+              onClick={() => decreaseBet(5)}
+              disabled={!canDecrease}
+            >
+              -$5
+            </button>
+            <button 
+              className="bet-button increase" 
+              onClick={() => increaseBet(5)}
+              disabled={!canIncrease}
+            >
+              +$5
+            </button>
+          </div>
+          
+          <div className="chip-selection">
+            <h5>Quick Bet</h5>
+            <div className="chips">
+              {chipValues.map(value => (
+                <Chip 
+                  key={value} 
+                  value={value} 
+                  onClick={() => setBet(value)}
+                />
+              ))}
+            </div>
+          </div>
+          
+          <div className="bet-actions">
+            <button 
+              className="bet-button clear" 
+              onClick={() => setBet(0)}
+              disabled={player.bet === 0}
+            >
+              Clear Bet
+            </button>
+            <button 
+              className="bet-button max" 
+              onClick={() => setBet(availableBalance)}
+              disabled={player.bet >= availableBalance}
+            >
+              Max Bet
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {!canBet && availableBalance < minBet && (
+        <div className="insufficient-funds">
+          Insufficient funds (Need ${minBet})
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlayerHand({ 
   player, 
   isActive, 
   onHit, 
-  onStand 
+  onStand,
+  onBetChange,
+  gamePhase,
+  isBettingPhase = false
 }: { 
   player: UIPlayer;
   isActive: boolean;
   onHit: (seat: number) => void;
   onStand: (seat: number) => void;
+  onBetChange?: (seat: number, newBet: number) => void;
+  gamePhase: string;
+  isBettingPhase?: boolean;
 }) {
-  const canTakeAction = isActive && !player.isStanding && !player.isBusted && player.handValue < 21;
+  const canTakeAction = isActive && !player.isStanding && !player.isBusted && player.handValue < 21 && gamePhase === 'decisions';
+  const showBettingControls = isBettingPhase && onBetChange && (player.balance + player.bet) >= 5; // Show if in betting phase and has funds
 
   return (
-    <div className={`player-section ${isActive ? 'active-player' : ''} ${player.result ? `result-${player.result}` : ''}`}>
+    <div className={`player-section ${isActive ? 'active-player' : ''} ${player.result ? `result-${player.result}` : ''} ${isBettingPhase ? 'betting-phase' : ''}`}>
       <h3 className="player-name">{player.name}</h3>
+      
+      <div className="player-info">
+        <div className="balance-display">
+          <strong>Balance: ${player.balance}</strong>
+        </div>
+        {player.bet > 0 && !isBettingPhase && (
+          <div className="bet-display">
+            <span>Bet: </span>
+            <Chip value={player.bet} />
+          </div>
+        )}
+      </div>
+
+      {showBettingControls && (
+        <BettingControls
+          player={player}
+          onBetChange={onBetChange}
+          isActive={true}
+        />
+      )}
+
       <div className="hand">
         {player.hand.map((card, index) => (
           <PlayingCard key={card.id || `card-${index}`} card={card} />
         ))}
         {player.hand.length === 0 && <div className="empty-hand">No cards</div>}
       </div>
+      
       {player.hand.length > 0 && (
         <div className="hand-info">
           <div className={`hand-value ${player.isBusted ? 'busted' : ''}`}>
@@ -138,6 +304,7 @@ function PlayerHand({
           )}
         </div>
       )}
+      
       {canTakeAction && (
         <div className="player-actions">
           <button 
@@ -158,44 +325,57 @@ function PlayerHand({
   );
 }
 
-function DealerSection({ dealer, gamePhase }: { dealer: UIDealer; gamePhase: string }) {
+function DealerSection({ dealer, gamePhase, handNumber }: { dealer: UIDealer; gamePhase: string; handNumber: number }) {
   const showFullValue = gamePhase === 'dealer' || gamePhase === 'settling' || gamePhase === 'finished';
-  const displayHand = showFullValue ? dealer.hand : dealer.visibleHand;
   const displayValue = showFullValue ? dealer.handValue : dealer.visibleValue;
   
   return (
     <div className="dealer-section">
-      <h2 className="dealer-name">{dealer.name}</h2>
-      <div className="hand">
-        {displayHand.map((card, index) => (
-          <PlayingCard 
-            key={card.id || `dealer-card-${index}`} 
-            card={card} 
-            isHidden={!showFullValue && index === 1 && dealer.hand.length >= 2} 
-          />
-        ))}
-        {displayHand.length === 0 && <div className="empty-hand">No cards</div>}
+      <div className="dealer-left">
+        <h2 className="dealer-name">{dealer.name}</h2>
+        <div className="hand">
+          {dealer.hand.map((card, index) => (
+            <PlayingCard 
+              key={card.id || `dealer-card-${index}`} 
+              card={card} 
+              isHidden={!showFullValue && index === 1 && dealer.hand.length >= 2} 
+            />
+          ))}
+          {dealer.hand.length === 0 && <div className="empty-hand">No cards</div>}
+        </div>
+        {dealer.hand.length > 0 && (
+          <div className="hand-info">
+            <div className={`hand-value ${dealer.isBusted ? 'busted' : ''}`}>
+              {showFullValue ? (
+                <>
+                  Value: {displayValue}
+                  {dealer.isBusted && ' (BUST)'}
+                  {dealer.isStanding && !dealer.isBusted && ' (STAND)'}
+                </>
+              ) : (
+                `Showing: ${displayValue}`
+              )}
+            </div>
+          </div>
+        )}
+        {gamePhase === 'dealer' && !dealer.isStanding && !dealer.isBusted && (
+          <div className="dealer-status">
+            <p>Dealer is playing...</p>
+          </div>
+        )}
       </div>
-      {displayHand.length > 0 && (
-        <div className="hand-info">
-          <div className={`hand-value ${dealer.isBusted ? 'busted' : ''}`}>
-            {showFullValue ? (
-              <>
-                Value: {displayValue}
-                {dealer.isBusted && ' (BUST)'}
-                {dealer.isStanding && !dealer.isBusted && ' (STAND)'}
-              </>
-            ) : (
-              `Showing: ${displayValue}`
-            )}
+      <div className="dealer-right">
+        <div className="game-status-info">
+          <div className="status-item">
+            <span className="status-label">Hand #</span>
+            <span className="status-value">{handNumber}</span>
+          </div>
+          <div className="status-item">
+            <span className="status-label">Phase</span>
+            <span className="status-value">{gamePhase}</span>
           </div>
         </div>
-      )}
-      {gamePhase === 'dealer' && !dealer.isStanding && !dealer.isBusted && (
-        <div className="dealer-status">
-          <p>Dealer is playing...</p>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -244,13 +424,64 @@ function App() {
     };
   }, []);
 
+  // Auto-play dealer when game phase becomes 'dealer'
+  useEffect(() => {
+    if (gameState?.gamePhase === 'dealer' && !isLoading) {
+      const autoPlayDealer = async () => {
+        try {
+          setIsLoading(true);
+          // Add a small delay for better UX
+          setTimeout(async () => {
+            try {
+              const result = await backendClient.dealerPlay();
+              const newState = convertBackendState(result.state);
+              // Apply results to players
+              result.results.forEach(r => {
+                const player = newState.players.find(p => p.seat === r.seat);
+                if (player) {
+                  player.result = r.result;
+                }
+              });
+              setGameState(newState);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Failed to auto-play dealer hand');
+            } finally {
+              setIsLoading(false);
+            }
+          }, 1500); // 1.5 second delay to show "Dealer is playing..." message
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Failed to auto-play dealer hand');
+          setIsLoading(false);
+        }
+      };
+      
+      autoPlayDealer();
+    }
+  }, [gameState?.gamePhase, isLoading]);
+
   const startNewHand = async () => {
     try {
       setIsLoading(true);
+      // Start betting phase in backend
       await backendClient.startNextHand();
-      // State will be updated via WebSocket
+      // Fetch updated state after starting betting phase
+      const backendState = await backendClient.getState();
+      setGameState(convertBackendState(backendState));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start new hand');
+      setError(err instanceof Error ? err.message : 'Failed to start betting phase');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const proceedToDeal = async () => {
+    try {
+      setIsLoading(true);
+      // Start dealing cards after betting phase
+      const result = await backendClient.startDealing();
+      setGameState(convertBackendState(result.state));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start dealing');
     } finally {
       setIsLoading(false);
     }
@@ -260,7 +491,9 @@ function App() {
     try {
       setIsLoading(true);
       await backendClient.startDecisions();
-      // State will be updated via WebSocket
+      // Fetch updated state after starting decisions
+      const backendState = await backendClient.getState();
+      setGameState(convertBackendState(backendState));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start decisions');
     } finally {
@@ -312,6 +545,18 @@ function App() {
     }
   };
 
+  const handleBetChange = async (seat: number, newBet: number) => {
+    try {
+      setIsLoading(true);
+      const result = await backendClient.placeBet(seat, newBet);
+      setGameState(convertBackendState(result.state));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to place bet');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const clearError = () => setError(null);
 
   if (isLoading && !gameState) {
@@ -345,7 +590,10 @@ function App() {
 
   const canDeal = gameState.gamePhase === 'waiting' || gameState.gamePhase === 'finished';
   const canStartDecisions = gameState.gamePhase === 'dealing' || gameState.gamePhase === 'table-talk';
-  const canPlayDealer = gameState.gamePhase === 'decisions' && gameState.currentPlayerIndex === -1;
+  const canPlayDealer = gameState.gamePhase === 'dealer' || (gameState.gamePhase === 'decisions' && gameState.currentPlayerIndex === -1);
+  const isBettingPhase = gameState.gamePhase === 'betting';
+  const allPlayersBet = gameState.players.every(player => player.bet >= 5); // Minimum bet requirement
+  const canStartDealing = gameState.gamePhase === 'betting' && allPlayersBet;
 
   return (
     <div className="blackjack-table">
@@ -386,26 +634,37 @@ function App() {
               Play Dealer Hand
             </button>
           )}
-        </div>
-        <div className="game-info">
-          <p>Hand Number: {gameState.handNumber}</p>
-          <p>Phase: {gameState.gamePhase}</p>
-          {gameState.currentPlayerIndex >= 0 && (
-            <p>Current Player: {gameState.players[gameState.currentPlayerIndex]?.name}</p>
+          {canStartDealing && (
+            <button 
+              className="proceed-betting-button" 
+              onClick={proceedToDeal}
+              disabled={isLoading}
+            >
+              Deal Cards
+            </button>
           )}
         </div>
+        {isBettingPhase && (
+          <div className="betting-phase-indicator">
+            <h2>🎰 BETTING PHASE 🎰</h2>
+            <p>Players, place your bets! Minimum bet: $5</p>
+          </div>
+        )}
       </div>
 
-      <DealerSection dealer={gameState.dealer} gamePhase={gameState.gamePhase} />
+      <DealerSection dealer={gameState.dealer} gamePhase={gameState.gamePhase} handNumber={gameState.handNumber} />
       
       <div className="players-section">
-        {gameState.players.map((player, index) => (
+        {gameState.players.map((player) => (
           <PlayerHand 
             key={player.seat} 
             player={player}
             isActive={gameState.currentPlayerIndex === player.seat && gameState.gamePhase === 'decisions'}
             onHit={handleHit}
             onStand={handleStand}
+            onBetChange={handleBetChange}
+            gamePhase={gameState.gamePhase}
+            isBettingPhase={isBettingPhase}
           />
         ))}
       </div>
