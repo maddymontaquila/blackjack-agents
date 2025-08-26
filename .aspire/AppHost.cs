@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.AspNetCore.SignalR;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -11,11 +12,16 @@ var frontend = builder.AddViteApp("frontend", "../src/frontend")
     .WithReference(backend)
     .WithNpmPackageInstallation();
 
+#pragma warning disable ASPIREHOSTINGPYTHON001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+var patPython = builder.AddUvApp("pat-python", "../src/pat-python", "main.py")
+    .WithHttpEndpoint(targetPort: 8000, isProxied: false);
+#pragma warning restore ASPIREHOSTINGPYTHON001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+
 backend.WithEnvironment("CORS_ORIGINS", frontend.GetEndpoint("http"));
 
 backend.WithHttpCommand(
         path: "/api/reset",
-        displayName: "Reset Table",
+        displayName: "Reset Game Table",
         endpointName: "http",
         commandOptions: new HttpCommandOptions()
         {

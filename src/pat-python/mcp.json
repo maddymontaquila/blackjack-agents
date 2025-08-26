@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pat-python": {
+      "command": "python",
+      "args": ["main.py"],
+      "cwd": ".",
+      "env": {
+        "PYTHONPATH": "."
+      }
+    }
+  }
+}

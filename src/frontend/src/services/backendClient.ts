@@ -77,6 +77,16 @@ class BackendClient {
     return response.json();
   }
 
+  async placeAgentBets(): Promise<ActionResult> {
+    const response = await fetch(`${this.baseUrl}/api/agent-bets`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to place agent bets: ${response.statusText}`);
+    }
+    return response.json();
+  }
+
   async startDealing(): Promise<{ ok: boolean; state: BackendState }> {
     const response = await fetch(`${this.baseUrl}/api/start-dealing`, {
       method: 'POST',

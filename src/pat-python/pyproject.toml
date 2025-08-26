@@ -1,0 +1,14 @@
+[project]
+name = "pat-python"
+version = "1.0.0"
+description = "Pat Python - Funny AI Blackjack Agent (MCP Server)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp",
+    "pydantic",
+    "fastapi",
+    "uvicorn[standard]",
+    "openai",
+    "azure-identity",
+]

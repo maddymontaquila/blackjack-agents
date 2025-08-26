@@ -259,19 +259,19 @@ function PlayerHand({
 
   return (
     <div className={`player-section ${isActive ? 'active-player' : ''} ${player.result ? `result-${player.result}` : ''} ${isBettingPhase ? 'betting-phase' : ''}`}>
-      <h3 className="player-name">{player.name}</h3>
-      
-      <div className="player-info">
+      <div className="player-header">
+        <h3 className="player-name">{player.name}</h3>
         <div className="balance-display">
-          <strong>Balance: ${player.balance}</strong>
+          <strong>${player.balance}</strong>
         </div>
-        {player.bet > 0 && !isBettingPhase && (
-          <div className="bet-display">
-            <span>Bet: </span>
-            <Chip value={player.bet} />
-          </div>
-        )}
       </div>
+      
+      {player.bet > 0 && !isBettingPhase && (
+        <div className="bet-display">
+          <span>Bet: </span>
+          <Chip value={player.bet} />
+        </div>
+      )}
 
       {showBettingControls && (
         <BettingControls
@@ -325,7 +325,7 @@ function PlayerHand({
   );
 }
 
-function DealerSection({ dealer, gamePhase, handNumber }: { dealer: UIDealer; gamePhase: string; handNumber: number }) {
+function DealerSection({ dealer, gamePhase, handNumber, connectionStatus }: { dealer: UIDealer; gamePhase: string; handNumber: number; connectionStatus: 'disconnected' | 'connecting' | 'connected' }) {
   const showFullValue = gamePhase === 'dealer' || gamePhase === 'settling' || gamePhase === 'finished';
   const displayValue = showFullValue ? dealer.handValue : dealer.visibleValue;
   
@@ -366,6 +366,10 @@ function DealerSection({ dealer, gamePhase, handNumber }: { dealer: UIDealer; ga
       </div>
       <div className="dealer-right">
         <div className="game-status-info">
+          <div className="status-item">
+            <span className="status-label">Status</span>
+            <span className={`status-value status-${connectionStatus}`}>{connectionStatus}</span>
+          </div>
           <div className="status-item">
             <span className="status-label">Hand #</span>
             <span className="status-value">{handNumber}</span>
@@ -469,6 +473,18 @@ function App() {
       setGameState(convertBackendState(backendState));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start betting phase');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const placeAgentBets = async () => {
+    try {
+      setIsLoading(true);
+      const result = await backendClient.placeAgentBets();
+      setGameState(convertBackendState(result.state));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to place agent bets');
     } finally {
       setIsLoading(false);
     }
@@ -599,9 +615,6 @@ function App() {
     <div className="blackjack-table">
       <div className="game-header">
         <h1>Blackjack Table</h1>
-        <div className="connection-status">
-          Status: <span className={`status-${connectionStatus}`}>{connectionStatus}</span>
-        </div>
         {error && (
           <div className="error-banner">
             {error}
@@ -648,11 +661,18 @@ function App() {
           <div className="betting-phase-indicator">
             <h2>🎰 BETTING PHASE 🎰</h2>
             <p>Players, place your bets! Minimum bet: $5</p>
+            <button 
+              className="agent-bet-button" 
+              onClick={placeAgentBets}
+              disabled={isLoading}
+            >
+              🤖 Place AI Agent Bets
+            </button>
           </div>
         )}
       </div>
 
-      <DealerSection dealer={gameState.dealer} gamePhase={gameState.gamePhase} handNumber={gameState.handNumber} />
+      <DealerSection dealer={gameState.dealer} gamePhase={gameState.gamePhase} handNumber={gameState.handNumber} connectionStatus={connectionStatus} />
       
       <div className="players-section">
         {gameState.players.map((player) => (

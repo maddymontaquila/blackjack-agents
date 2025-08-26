@@ -1,11 +1,24 @@
 import express from 'express';
 import { TableState } from '../engine/state.js';
 import { eventsBroadcaster } from './ws.js';
+import { AgentClient } from '../mcp/httpClient.js';
+import { loadConfig } from '../config.js';
 
 const router = express.Router();
 
-// Global table state (in production this would be more sophisticated)
-const tableState = new TableState();
+// Initialize agent clients from configuration
+const config = loadConfig();
+const agentClients = new Map<number, AgentClient>();
+
+// Set up Pat Python on seat 0
+agentClients.set(0, new AgentClient(config.agents.pat.url, config.agents.pat.timeouts));
+
+// TODO: Add other agents when ready
+// agentClients.set(1, new AgentClient(config.agents.dee.url, config.agents.dee.timeouts));
+// agentClients.set(2, new AgentClient(config.agents.tom.url, config.agents.tom.timeouts));
+
+// Global table state with agent clients
+const tableState = new TableState(agentClients);
 
 // GET /state - Get current table state
 router.get('/state', (req, res) => {
@@ -33,7 +46,7 @@ router.post('/next', (req, res) => {
   }
 });
 
-// POST /bet - Place a bet
+// POST /bet - Place a bet (manual)
 router.post('/bet', (req, res) => {
   try {
     const { seat, amount } = req.body;
@@ -49,10 +62,23 @@ router.post('/bet', (req, res) => {
     
     const state = tableState.getState();
     eventsBroadcaster.broadcastState(); // Broadcast updated state
-    res.json({ success: true, state });
+    return res.json({ success: true, state });
   } catch (error) {
     console.error('Error placing bet:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /agent-bets - Place bets for all agents
+router.post('/agent-bets', async (req, res) => {
+  try {
+    await tableState.placeBetsForAllAgents();
+    const state = tableState.getState();
+    eventsBroadcaster.broadcastState(); // Broadcast updated state
+    return res.json({ success: true, state });
+  } catch (error) {
+    console.error('Error placing agent bets:', error);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -100,10 +126,10 @@ router.post('/action', (req, res) => {
     
     const state = tableState.getState();
     eventsBroadcaster.broadcastState(); // Broadcast updated state
-    res.json({ success: true, state });
+    return res.json({ success: true, state });
   } catch (error) {
     console.error('Error applying action:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 

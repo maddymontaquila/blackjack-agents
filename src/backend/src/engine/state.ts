@@ -1,6 +1,7 @@
-import type { TPublicSnapshot, TPrivateInfo, TChatMsg, TAction } from '@shared/schemas';
+import type { TPublicSnapshot, TPrivateInfo, TChatMsg, TAction, TAgentIO, TTalkOut, TDecisionOut } from '@shared/schemas';
 import { Shoe } from './shoe.js';
 import { calculateHandValue, isBust, isBlackjack, determineHandResult, shouldDealerHit, canSplit, canDouble, type HandResult } from './rules.js';
+import { AgentClient } from '../mcp/httpClient.js';
 
 export interface Player {
   id: string;
@@ -30,16 +31,18 @@ export interface GameState {
 
 export class TableState {
   private state: GameState;
+  private agentClients: Map<number, AgentClient> = new Map();
 
-  constructor() {
+  constructor(agentClients: Map<number, AgentClient> = new Map()) {
+    this.agentClients = agentClients;
     this.state = {
       handNumber: 0,
       shoe: new Shoe(Date.now(), 4),
       dealer: { cards: [], isStanding: false, isBusted: false },
       players: [
-        { id: 'Player 1', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Player 2', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Player 3', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
+        { id: 'Pat Python', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Dee DotNet', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Tom TypeScript', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
       ],
       chat: [],
       phase: 'waiting',
@@ -166,6 +169,56 @@ export class TableState {
     return true;
   }
 
+  // Place bet for an agent player
+  async placeBetForAgent(seat: number): Promise<void> {
+    if (this.state.phase !== 'betting') {
+      throw new Error('Not in betting phase');
+    }
+
+    const player = this.state.players.find(p => p.seat === seat);
+    if (!player) {
+      throw new Error(`Player at seat ${seat} not found`);
+    }
+
+    const agentClient = this.agentClients.get(seat);
+    if (!agentClient) {
+      throw new Error(`No agent client configured for seat ${seat}`);
+    }
+
+    try {
+      // Call agent's place_bet method
+      const betResult = await agentClient.placeBet(player.bankroll, this.state.handNumber);
+      
+      // Validate and place the bet
+      if (this.placeBet(seat, betResult.bet_amount)) {
+        // Add chat message about the bet
+        this.addChatMessage(player.id, betResult.rationale);
+      } else {
+        // Fallback to minimum bet if agent's bet was invalid
+        this.placeBet(seat, 5);
+        this.addChatMessage(player.id, "Oops, betting logic failed - going minimum!");
+      }
+    } catch (error) {
+      // Emergency fallback - place minimum bet
+      this.placeBet(seat, 5);
+      this.addChatMessage(player.id, "My betting circuits are fried - minimum bet it is!");
+    }
+  }
+
+  // Place bets for all agent players
+  async placeBetsForAllAgents(): Promise<void> {
+    if (this.state.phase !== 'betting') {
+      throw new Error('Not in betting phase');
+    }
+
+    const agentSeats = Array.from(this.agentClients.keys());
+    
+    // Place bets for all agents in parallel
+    await Promise.all(
+      agentSeats.map(seat => this.placeBetForAgent(seat))
+    );
+  }
+
   // Check if all players have placed valid bets
   allPlayersHaveBet(): boolean {
     return this.state.players.every(player => player.bet >= 5);
@@ -254,28 +307,28 @@ export class TableState {
         player.isStanding = true;
         break;
       
-      case 'double':
-        if (canDouble(player.cards)) {
-          player.bet *= 2;
-          const doubleCard = this.state.shoe.draw();
-          if (doubleCard !== null) {
-            player.cards.push(doubleCard);
-          }
-          player.isStanding = true;
-          if (isBust(player.cards)) {
-            player.isBusted = true;
-          }
-        } else {
-          // Fallback to hit if double not allowed
-          return this.applyPlayerAction(seat, 'hit');
-        }
-        break;
+      // case 'double':
+      //   if (canDouble(player.cards)) {
+      //     player.bet *= 2;
+      //     const doubleCard = this.state.shoe.draw();
+      //     if (doubleCard !== null) {
+      //       player.cards.push(doubleCard);
+      //     }
+      //     player.isStanding = true;
+      //     if (isBust(player.cards)) {
+      //       player.isBusted = true;
+      //     }
+      //   } else {
+      //     // Fallback to hit if double not allowed
+      //     return this.applyPlayerAction(seat, 'hit');
+      //   }
+      //   break;
       
-      case 'split':
-        // For simplicity in this demo, treat split as stand
-        // Full split implementation would require more complex state management
-        player.isStanding = true;
-        break;
+      // case 'split':
+      //   // For simplicity in this demo, treat split as stand
+      //   // Full split implementation would require more complex state management
+      //   player.isStanding = true;
+      //   break;
     }
 
     // Check if we need to advance to next player
@@ -376,13 +429,13 @@ export class TableState {
 
     const actions: TAction[] = ['hit', 'stand'];
     
-    if (canDouble(player.cards)) {
-      actions.push('double');
-    }
+    // if (canDouble(player.cards)) {
+    //   actions.push('double');
+    // }
     
-    if (canSplit(player.cards)) {
-      actions.push('split');
-    }
+    // if (canSplit(player.cards)) {
+    //   actions.push('split');
+    // }
     
     return actions;
   }
@@ -394,9 +447,9 @@ export class TableState {
       shoe: new Shoe(Date.now(), 4),
       dealer: { cards: [], isStanding: false, isBusted: false },
       players: [
-        { id: 'Player 1', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Player 2', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Player 3', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
+        { id: 'Pat Python', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Dee DotNet', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
+        { id: 'Tom TypeScript', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
       ],
       chat: [],
       phase: 'waiting',

@@ -36,7 +36,6 @@ src/
 import { z } from "zod";
 
 export const Action = z.enum(["hit","stand","double","split"]);
-export const TalkSignal = z.enum(["aggressive","conservative","neutral"]).optional();
 
 export const PublicPlayer = z.object({
   id: z.string().min(1).max(64),
@@ -71,7 +70,6 @@ export const AgentIO = z.object({
 
 export const TalkOut = z.object({
   say: z.string().min(1).max(160),
-  signal: TalkSignal,
 });
 
 export const DecisionOut = z.object({

@@ -1,7 +1,6 @@
 import { z } from "zod";
 
-export const Action = z.enum(["hit","stand","double","split"]);
-export const TalkSignal = z.enum(["aggressive","conservative","neutral"]).optional();
+export const Action = z.enum(["hit","stand"]);
 
 export const PublicPlayer = z.object({
   id: z.string().min(1).max(64),
@@ -35,9 +34,13 @@ export const AgentIO = z.object({
   me: PrivateInfo,
 });
 
+export const BetOut = z.object({
+  bet_amount: z.number().int().min(5).max(100),
+  rationale: z.string().min(1).max(160),
+});
+
 export const TalkOut = z.object({
   say: z.string().min(1).max(160),
-  signal: TalkSignal,
 });
 
 export const DecisionOut = z.object({
@@ -50,6 +53,7 @@ export type TPublicSnapshot = z.infer<typeof PublicSnapshot>;
 export type TPrivateInfo   = z.infer<typeof PrivateInfo>;
 export type TAgentIO       = z.infer<typeof AgentIO>;
 export type TDecisionOut   = z.infer<typeof DecisionOut>;
+export type TBetOut        = z.infer<typeof BetOut>;
 export type TTalkOut       = z.infer<typeof TalkOut>;
 export type TAction        = z.infer<typeof Action>;
 export type TPublicPlayer  = z.infer<typeof PublicPlayer>;

@@ -3,9 +3,9 @@ export interface Config {
   port: number;
   corsOrigins: string[];
   agents: {
-    pat: { url: string; timeouts: { talk: number; decide: number } };
-    dee: { url: string; timeouts: { talk: number; decide: number } };
-    tom: { url: string; timeouts: { talk: number; decide: number } };
+    pat: { url: string; timeouts: { talk: number; decide: number; bet: number } };
+    dee: { url: string; timeouts: { talk: number; decide: number; bet: number } };
+    tom: { url: string; timeouts: { talk: number; decide: number; bet: number } };
   };
 }
 
@@ -18,16 +18,16 @@ export function loadConfig(): Config {
     corsOrigins,
     agents: {
       pat: {
-        url: process.env.PAT_PYTHON_URL || 'http://localhost:3002',
-        timeouts: { talk: 3000, decide: 5000 }
+        url: process.env.PAT_PYTHON_URL || 'http://localhost:8000',
+        timeouts: { talk: 3000, decide: 5000, bet: 2000 }
       },
       dee: {
         url: process.env.DEE_DOTNET_URL || 'http://localhost:3003',
-        timeouts: { talk: 3000, decide: 5000 }
+        timeouts: { talk: 3000, decide: 5000, bet: 2000 }
       },
       tom: {
         url: process.env.TOM_TYPESCRIPT_URL || 'http://localhost:3004',
-        timeouts: { talk: 3000, decide: 5000 }
+        timeouts: { talk: 3000, decide: 5000, bet: 2000 }
       }
     }
   };
