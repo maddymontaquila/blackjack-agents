@@ -15,6 +15,8 @@ export interface UIPlayer {
   balance: number;
   seat: number;
   hasBet: boolean;
+  currentMessage?: string;
+  isTyping: boolean;
 }
 
 export interface UIDealer {
@@ -34,6 +36,7 @@ export interface UIGameState {
   gamePhase: string;
   handNumber: number;
   results: Array<{ seat: number; result: 'win' | 'lose' | 'push'; payout: number }>;
+  chatMessages: Array<{ from: string; text: string }>;
 }
 
 // Convert backend state to UI state
@@ -49,6 +52,11 @@ function convertBackendState(backendState: BackendState): UIGameState {
   };
 
   const players: UIPlayer[] = backendState.snap.players.map(p => {
+    // Find the current message for this player from recent chat
+    const recentMessage = backendState.snap.chat
+      .filter(msg => msg.from === p.id)
+      .slice(-1)[0]; // Get the most recent message from this player
+    
     return {
       name: p.id,
       hand: valuesToCards(p.visibleCards),
@@ -59,7 +67,9 @@ function convertBackendState(backendState: BackendState): UIGameState {
       bet: p.bet || 0, // Backend now manages bets
       balance: p.balance || 100, // Backend now manages balance
       seat: p.seat,
-      hasBet: (p.bet || 0) >= 5 // Minimum $5 bet required
+      hasBet: (p.bet || 0) >= 5, // Minimum $5 bet required
+      currentMessage: recentMessage?.text,
+      isTyping: false // Will be updated by WebSocket events
     };
   });
 
@@ -69,11 +79,76 @@ function convertBackendState(backendState: BackendState): UIGameState {
     currentPlayerIndex: backendState.currentPlayerIndex,
     gamePhase: backendState.status,
     handNumber: backendState.snap.handNumber,
-    results: []
+    results: [],
+    chatMessages: backendState.snap.chat
   };
 }
 
 // Components
+
+function ChatBubble({ 
+  message, 
+  isTyping = false, 
+  playerName 
+}: { 
+  message?: string; 
+  isTyping?: boolean;
+  playerName: string;
+}) {
+  const [displayText, setDisplayText] = useState('');
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  // Typewriter effect for streaming messages
+  useEffect(() => {
+    if (!message) {
+      setDisplayText('');
+      setCurrentIndex(0);
+      return;
+    }
+
+    if (currentIndex < message.length) {
+      const timer = setTimeout(() => {
+        setDisplayText(message.slice(0, currentIndex + 1));
+        setCurrentIndex(currentIndex + 1);
+      }, 30); // Adjust speed here (ms per character)
+      
+      return () => clearTimeout(timer);
+    }
+  }, [message, currentIndex]);
+
+  // Reset when message changes
+  useEffect(() => {
+    setCurrentIndex(0);
+    setDisplayText('');
+  }, [message]);
+
+  if (!message && !isTyping) return null;
+
+  return (
+    <div className="chat-bubble-container">
+      <div className={`chat-bubble ${isTyping ? 'typing' : 'message'}`}>
+        {isTyping ? (
+          <div className="typing-indicator">
+            <span className="typing-dots">
+              <span></span>
+              <span></span>
+              <span></span>
+            </span>
+          </div>
+        ) : (
+          <>
+            <div className="chat-text">{displayText}</div>
+            {currentIndex < (message?.length || 0) && (
+              <span className="cursor">|</span>
+            )}
+          </>
+        )}
+      </div>
+      <div className="chat-bubble-tail"></div>
+    </div>
+  );
+}
+
 function PlayingCard({ card, isHidden = false }: { card: Card; isHidden?: boolean }) {
   const suitSymbols = {
     hearts: '♥',
@@ -266,6 +341,13 @@ function PlayerHand({
         </div>
       </div>
       
+      {/* Chat bubble for player messages */}
+      <ChatBubble 
+        message={player.currentMessage}
+        isTyping={player.isTyping}
+        playerName={player.name}
+      />
+      
       {player.bet > 0 && !isBettingPhase && (
         <div className="bet-display">
           <span>Bet: </span>
@@ -389,8 +471,35 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [playerTypingStates, setPlayerTypingStates] = useState<Record<string, boolean>>({});
+  const [streamingMessages, setStreamingMessages] = useState<Record<string, string>>({});
 
-  // Load initial state and connect to WebSocket
+  // Helper to update player typing state
+  const setPlayerTyping = (playerId: string, isTyping: boolean) => {
+    setPlayerTypingStates(prev => ({ ...prev, [playerId]: isTyping }));
+  };
+
+  // Helper to update streaming message for a player
+  const setPlayerMessage = (playerId: string, message: string) => {
+    setStreamingMessages(prev => ({ ...prev, [playerId]: message }));
+  };
+
+  // Convert backend state to UI state, incorporating streaming states
+  const convertBackendStateWithStreaming = (backendState: BackendState): UIGameState => {
+    const convertedState = convertBackendState(backendState);
+    
+    // Update players with streaming states
+    const playersWithStreaming = convertedState.players.map(player => ({
+      ...player,
+      isTyping: playerTypingStates[player.name] || false,
+      currentMessage: streamingMessages[player.name] || player.currentMessage
+    }));
+    
+    return {
+      ...convertedState,
+      players: playersWithStreaming
+    };
+  };
   useEffect(() => {
     const initialize = async () => {
       try {
@@ -399,7 +508,7 @@ function App() {
         
         // Get initial state
         const backendState = await backendClient.getState();
-        setGameState(convertBackendState(backendState));
+        setGameState(convertBackendStateWithStreaming(backendState));
         
         // Connect to WebSocket for real-time updates
         await backendClient.connectWebSocket();
@@ -408,7 +517,38 @@ function App() {
         // Listen for state updates
         backendClient.addEventListener('state', (data) => {
           if (data.state) {
-            setGameState(convertBackendState(data.state));
+            setGameState(convertBackendStateWithStreaming(data.state));
+          }
+        });
+
+        // Listen for chat typing indicators
+        backendClient.addEventListener('player-typing', (data) => {
+          if (data.playerId) {
+            setPlayerTyping(data.playerId, data.isTyping);
+          }
+        });
+
+        // Listen for streaming chat messages
+        backendClient.addEventListener('chat-stream', (data) => {
+          if (data.playerId && data.text !== undefined) {
+            setPlayerMessage(data.playerId, data.text);
+            // If message is complete, stop typing indicator
+            if (data.complete) {
+              setPlayerTyping(data.playerId, false);
+            }
+          }
+        });
+
+        // Listen for new complete chat messages
+        backendClient.addEventListener('chat-message', (data) => {
+          if (data.from && data.text) {
+            setPlayerTyping(data.from, false);
+            // Update the game state to include the new message
+            setGameState(prev => {
+              if (!prev) return prev;
+              const newChatMessages = [...prev.chatMessages, { from: data.from, text: data.text }];
+              return { ...prev, chatMessages: newChatMessages };
+            });
           }
         });
         
@@ -658,9 +798,7 @@ function App() {
           )}
         </div>
         {isBettingPhase && (
-          <div className="betting-phase-indicator">
-            <h2>🎰 BETTING PHASE 🎰</h2>
-            <p>Players, place your bets! Minimum bet: $5</p>
+          <div className="betting-phase-controls">
             <button 
               className="agent-bet-button" 
               onClick={placeAgentBets}

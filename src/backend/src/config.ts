@@ -19,15 +19,15 @@ export function loadConfig(): Config {
     agents: {
       pat: {
         url: process.env.PAT_PYTHON_URL || 'http://localhost:8000',
-        timeouts: { talk: 3000, decide: 5000, bet: 2000 }
+        timeouts: { talk: 20000, decide: 25000, bet: 20000 } // Reasonable timeouts for Azure AI
       },
       dee: {
         url: process.env.DEE_DOTNET_URL || 'http://localhost:3003',
-        timeouts: { talk: 3000, decide: 5000, bet: 2000 }
+        timeouts: { talk: 10000, decide: 15000, bet: 10000 }
       },
       tom: {
         url: process.env.TOM_TYPESCRIPT_URL || 'http://localhost:3004',
-        timeouts: { talk: 3000, decide: 5000, bet: 2000 }
+        timeouts: { talk: 10000, decide: 15000, bet: 10000 }
       }
     }
   };

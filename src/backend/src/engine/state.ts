@@ -2,6 +2,7 @@ import type { TPublicSnapshot, TPrivateInfo, TChatMsg, TAction, TAgentIO, TTalkO
 import { Shoe } from './shoe.js';
 import { calculateHandValue, isBust, isBlackjack, determineHandResult, shouldDealerHit, canSplit, canDouble, type HandResult } from './rules.js';
 import { AgentClient } from '../mcp/httpClient.js';
+import { eventsBroadcaster } from '../api/ws.js';
 
 export interface Player {
   id: string;
@@ -182,24 +183,36 @@ export class TableState {
 
     const agentClient = this.agentClients.get(seat);
     if (!agentClient) {
-      throw new Error(`No agent client configured for seat ${seat}`);
+      console.log(`DEBUG: No agent client configured for seat ${seat} (${player.id}) - skipping automated betting (manual betting allowed)`);
+      return; // Skip this seat - allow manual betting
     }
 
     try {
-      // Call agent's place_bet method
-      const betResult = await agentClient.placeBet(player.bankroll, this.state.handNumber);
+      console.log(`DEBUG: Starting bet placement for ${player.id} at seat ${seat}`);
+      console.log(`DEBUG: Player bankroll: ${player.bankroll}, hand number: ${this.state.handNumber}`);
+      
+      // Call agent's place_bet method with streaming
+      console.log(`DEBUG: Calling placeBetStreaming for ${player.id}...`);
+      const startTime = Date.now();
+      const betResult = await agentClient.placeBetStreaming(player.bankroll, this.state.handNumber);
+      const endTime = Date.now();
+      console.log(`DEBUG: placeBetStreaming completed for ${player.id} in ${endTime - startTime}ms`);
       
       // Validate and place the bet
       if (this.placeBet(seat, betResult.bet_amount)) {
-        // Add chat message about the bet
+        // The rationale was already streamed via WebSocket, just add to chat
         this.addChatMessage(player.id, betResult.rationale);
+        console.log(`DEBUG: Bet placed successfully for ${player.id}: $${betResult.bet_amount}`);
       } else {
         // Fallback to minimum bet if agent's bet was invalid
         this.placeBet(seat, 5);
         this.addChatMessage(player.id, "Oops, betting logic failed - going minimum!");
+        console.log(`DEBUG: Fallback minimum bet placed for ${player.id}`);
       }
     } catch (error) {
       // Emergency fallback - place minimum bet
+      console.error(`Error in placeBetForAgent for seat ${seat} (${player.id}):`, error);
+      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
       this.placeBet(seat, 5);
       this.addChatMessage(player.id, "My betting circuits are fried - minimum bet it is!");
     }
@@ -207,16 +220,31 @@ export class TableState {
 
   // Place bets for all agent players
   async placeBetsForAllAgents(): Promise<void> {
+    console.log('DEBUG: placeBetsForAllAgents() called');
+    
     if (this.state.phase !== 'betting') {
       throw new Error('Not in betting phase');
     }
 
     const agentSeats = Array.from(this.agentClients.keys());
+    console.log(`DEBUG: Starting betting for ${agentSeats.length} agents: seats ${agentSeats.join(', ')}`);
+    console.log(`DEBUG: Current game phase: ${this.state.phase}`);
+    console.log(`DEBUG: Available agent clients: ${Array.from(this.agentClients.keys()).join(', ')}`);
     
-    // Place bets for all agents in parallel
+    if (agentSeats.length === 0) {
+      console.log('DEBUG: No agent clients configured - only manual betting available');
+      return;
+    }
+    
+    const startTime = Date.now();
+    
+    // Place bets for all agents in parallel and wait for all to complete
     await Promise.all(
       agentSeats.map(seat => this.placeBetForAgent(seat))
     );
+    
+    const endTime = Date.now();
+    console.log(`DEBUG: All agent bets completed in ${endTime - startTime}ms`);
   }
 
   // Check if all players have placed valid bets
@@ -225,21 +253,19 @@ export class TableState {
   }
 
   // Start dealing (move from betting to dealing phase)
-  startDealing(): void {
+  async startDealing(): Promise<void> {
     if (this.state.phase !== 'betting' || !this.allPlayersHaveBet()) {
       throw new Error('Cannot start dealing: not in betting phase or not all players have bet');
     }
 
+    console.log('Starting dealing phase - all bets are placed');
     this.state.phase = 'dealing';
     
-    // Bets are already deducted from bankrolls during placeBet
-    // No need to deduct again
-
-    // Deal initial cards
-    this.dealInitialCards();
+    // Deal initial cards (this will automatically progress through table-talk to decisions)
+    await this.dealInitialCards();
   }
 
-  private dealInitialCards(): void {
+  private async dealInitialCards(): Promise<void> {
     // Deal 2 cards to each player, then dealer
     for (let round = 0; round < 2; round++) {
       // Deal to players
@@ -264,8 +290,24 @@ export class TableState {
       }
     });
     
-    // Move to table talk phase
+    // Move to table talk phase and automatically generate table talk
     this.state.phase = 'table-talk';
+    
+    // Automatically generate table talk for all agents and wait for completion
+    console.log('Starting table talk generation...');
+    try {
+      await this.generateTableTalkForAllAgents();
+      console.log('Table talk generation completed, moving to decisions');
+      eventsBroadcaster.broadcastState();
+      
+      // After table talk, automatically move to decisions phase
+      await this.startDecisionPhase();
+    } catch (error) {
+      console.error('Error during automatic table talk generation:', error);
+      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+      // Still move to decisions even if table talk fails
+      await this.startDecisionPhase();
+    }
   }
 
   // Add chat message
@@ -274,10 +316,22 @@ export class TableState {
   }
 
   // Start decision phase
-  startDecisionPhase(): void {
+  async startDecisionPhase(): Promise<void> {
     this.state.phase = 'decisions';
     this.state.currentPlayerIndex = -1; // Start before first player
     this.findNextActivePlayer();
+    
+    // Automatically process agent decisions and wait for completion
+    console.log('Starting agent decision processing...');
+    try {
+      await this.processAllAgentDecisions();
+      console.log('All agent decisions processed');
+      // Broadcast final state update after decisions
+      eventsBroadcaster.broadcastState();
+    } catch (error) {
+      console.error('Error during automatic agent decisions processing:', error);
+      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+    }
   }
 
   // Apply player action
@@ -354,9 +408,20 @@ export class TableState {
       }
     }
     
-    // No more active players, move to dealer phase
+    // No more active players, move to dealer phase and automatically play
     this.state.currentPlayerIndex = -1;
     this.state.phase = 'dealer';
+    
+    // Automatically play dealer hand
+    this.playDealerHand();
+    
+    // Automatically settle hands after dealer finishes
+    const results = this.settleHands();
+    console.log('Hand settled automatically. Results:', results);
+    
+    // Broadcast final game state
+    eventsBroadcaster.broadcastState();
+    eventsBroadcaster.broadcastSettle(results);
   }
 
   // Play dealer hand
@@ -456,5 +521,130 @@ export class TableState {
       currentPlayerIndex: -1,
       maxPlayers: 3
     };
+  }
+
+  // Generate agent IO for a specific player
+  private buildAgentIO(seat: number, role: string): TAgentIO {
+    const player = this.state.players.find(p => p.seat === seat);
+    if (!player) throw new Error(`Player at seat ${seat} not found`);
+
+    const publicSnapshot: TPublicSnapshot = {
+      handNumber: this.state.handNumber,
+      shoePenetration: this.state.shoe.getPenetration(),
+      dealerUpcard: this.state.dealer.cards[0] ?? 1, // Default to ace if no dealer card yet
+      players: this.state.players.map(p => ({
+        id: p.id,
+        seat: p.seat,
+        visibleCards: p.cards,
+        bet: p.bet,
+        balance: p.bankroll,
+        lastAction: p.lastAction
+      })),
+      chat: this.state.chat
+    };
+
+    const privateInfo: TPrivateInfo = {
+      mySeat: seat,
+      bankroll: player.bankroll,
+      myHoleCards: player.cards
+    };
+
+    return {
+      role: role as any,
+      public: publicSnapshot,
+      me: privateInfo
+    };
+  }
+
+  // Generate table talk for all agents
+  async generateTableTalkForAllAgents(): Promise<void> {
+    if (this.state.phase !== 'table-talk') {
+      throw new Error('Not in table-talk phase');
+    }
+
+    const agentSeats = Array.from(this.agentClients.keys());
+    
+    // Generate table talk for all agents in parallel
+    await Promise.all(
+      agentSeats.map(seat => this.generateTableTalkForAgent(seat))
+    );
+  }
+
+  // Generate table talk for a specific agent
+  async generateTableTalkForAgent(seat: number): Promise<void> {
+    const player = this.state.players.find(p => p.seat === seat);
+    if (!player) {
+      throw new Error(`Player at seat ${seat} not found`);
+    }
+
+    const agentClient = this.agentClients.get(seat);
+    if (!agentClient) {
+      throw new Error(`No agent client configured for seat ${seat}`);
+    }
+
+    try {
+      const agentIO = this.buildAgentIO(seat, 'table-talk');
+      const talkResult = await agentClient.talkStreaming(agentIO);
+      
+      // The rationale was already streamed via WebSocket, just add to chat
+      this.addChatMessage(player.id, talkResult.say);
+    } catch (error) {
+      console.error(`Error generating table talk for ${player.id} at seat ${seat}:`, error);
+      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+      this.addChatMessage(player.id, "My chat circuits are on the fritz!");
+    }
+  }
+
+  // Make decision for an agent player
+  async makeDecisionForAgent(seat: number): Promise<void> {
+    const player = this.state.players.find(p => p.seat === seat);
+    if (!player) {
+      throw new Error(`Player at seat ${seat} not found`);
+    }
+
+    const agentClient = this.agentClients.get(seat);
+    if (!agentClient) {
+      throw new Error(`No agent client configured for seat ${seat}`);
+    }
+
+    try {
+      const agentIO = this.buildAgentIO(seat, 'decision');
+      const decisionResult = await agentClient.decideStreaming(agentIO);
+      
+      // The rationale was already streamed via WebSocket, just add to chat
+      this.addChatMessage(player.id, decisionResult.rationale);
+      
+      // Apply the decision
+      this.applyPlayerAction(seat, decisionResult.action);
+      
+      // Broadcast state update after each decision
+      eventsBroadcaster.broadcastState();
+    } catch (error) {
+      console.error(`Error making decision for ${player.id} at seat ${seat}:`, error);
+      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+      this.addChatMessage(player.id, "My decision circuits are fried - standing!");
+      this.applyPlayerAction(seat, 'stand');
+    }
+  }
+
+  // Process all agent decisions automatically
+  async processAllAgentDecisions(): Promise<void> {
+    if (this.state.phase !== 'decisions') {
+      throw new Error('Not in decisions phase');
+    }
+
+    // Process decisions one by one for current active player
+    while (this.state.phase === 'decisions' && this.state.currentPlayerIndex >= 0) {
+      const currentSeat = this.state.currentPlayerIndex;
+      const agentClient = this.agentClients.get(currentSeat);
+      
+      if (agentClient) {
+        // This is an agent, make automatic decision
+        await this.makeDecisionForAgent(currentSeat);
+      } else {
+        // This is a manual player, break and wait for manual input
+        break;
+      }
+    }
   }
 }

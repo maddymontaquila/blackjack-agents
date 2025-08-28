@@ -3,7 +3,7 @@ import { Server } from 'http';
 import { tableState } from './http.js';
 
 interface WebSocketMessage {
-  type: 'deal' | 'chat' | 'action' | 'dealer' | 'settle' | 'error' | 'state';
+  type: 'deal' | 'chat' | 'action' | 'dealer' | 'settle' | 'error' | 'state' | 'player-typing' | 'chat-stream' | 'chat-message';
   [key: string]: any;
 }
 
@@ -31,22 +31,33 @@ class EventsBroadcaster {
 
       ws.on('error', (error) => {
         console.error('WebSocket error:', error);
+        console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
       });
     });
   }
 
   private sendToClient(ws: WebSocket, message: WebSocketMessage) {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(message));
+      }
+    } catch (error) {
+      console.error('Error sending WebSocket message:', error, 'Message:', message);
+      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     }
   }
 
   broadcast(message: WebSocketMessage) {
     if (!this.wss) return;
     
-    this.wss.clients.forEach((client) => {
-      this.sendToClient(client, message);
-    });
+    try {
+      this.wss.clients.forEach((client) => {
+        this.sendToClient(client, message);
+      });
+    } catch (error) {
+      console.error('Error broadcasting WebSocket message:', error, 'Message:', message);
+      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+    }
   }
 
   // Convenience methods for different event types
@@ -76,6 +87,19 @@ class EventsBroadcaster {
 
   broadcastState() {
     this.broadcast({ type: 'state', state: tableState.getState() });
+  }
+
+  // Streaming chat methods
+  broadcastPlayerTyping(player: string, isTyping: boolean = true) {
+    this.broadcast({ type: 'player-typing', player, isTyping });
+  }
+
+  broadcastChatStream(player: string, content: string) {
+    this.broadcast({ type: 'chat-stream', player, content });
+  }
+
+  broadcastChatMessage(player: string, message: string) {
+    this.broadcast({ type: 'chat-message', player, message });
   }
 }
 

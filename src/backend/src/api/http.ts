@@ -11,11 +11,11 @@ const config = loadConfig();
 const agentClients = new Map<number, AgentClient>();
 
 // Set up Pat Python on seat 0
-agentClients.set(0, new AgentClient(config.agents.pat.url, config.agents.pat.timeouts));
+agentClients.set(0, new AgentClient(config.agents.pat.url, config.agents.pat.timeouts, 'Pat Python'));
 
 // TODO: Add other agents when ready
-// agentClients.set(1, new AgentClient(config.agents.dee.url, config.agents.dee.timeouts));
-// agentClients.set(2, new AgentClient(config.agents.tom.url, config.agents.tom.timeouts));
+// agentClients.set(1, new AgentClient(config.agents.dee.url, config.agents.dee.timeouts, 'Dee DotNet'));
+// agentClients.set(2, new AgentClient(config.agents.tom.url, config.agents.tom.timeouts, 'Tom TypeScript'));
 
 // Global table state with agent clients
 const tableState = new TableState(agentClients);
@@ -27,6 +27,7 @@ router.get('/state', (req, res) => {
     res.json(state);
   } catch (error) {
     console.error('Error getting state:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -42,6 +43,7 @@ router.post('/next', (req, res) => {
     res.json({ startedHand: state.snap.handNumber });
   } catch (error) {
     console.error('Error starting next hand:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -65,35 +67,44 @@ router.post('/bet', (req, res) => {
     return res.json({ success: true, state });
   } catch (error) {
     console.error('Error placing bet:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // POST /agent-bets - Place bets for all agents
 router.post('/agent-bets', async (req, res) => {
+  console.log('DEBUG: /agent-bets endpoint called');
   try {
+    const startTime = Date.now();
     await tableState.placeBetsForAllAgents();
+    const endTime = Date.now();
+    console.log(`DEBUG: placeBetsForAllAgents completed in ${endTime - startTime}ms`);
+    
     const state = tableState.getState();
     eventsBroadcaster.broadcastState(); // Broadcast updated state
+    console.log('DEBUG: Broadcasting state and returning response');
     return res.json({ success: true, state });
   } catch (error) {
     console.error('Error placing agent bets:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // POST /start-dealing - Start dealing cards (after betting phase)
-router.post('/start-dealing', (req, res) => {
+router.post('/start-dealing', async (req, res) => {
   try {
-    tableState.startDealing();
+    await tableState.startDealing();
     const state = tableState.getState();
-    console.log('Cards dealt, handNumber:', state.snap.handNumber, 'phase:', state.status);
+    console.log('Cards dealt and full automation completed, handNumber:', state.snap.handNumber, 'phase:', state.status);
     console.log('Players have cards:', state.snap.players.map(p => ({ id: p.id, cardCount: p.visibleCards.length, bet: p.bet })));
     console.log('Dealer has cards:', state.dealer.cards.length);
     eventsBroadcaster.broadcastDeal(state.snap); // Broadcast deal event
     res.json({ ok: true, state });
   } catch (error) {
     console.error('Error starting dealing:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     res.status(500).json({ error: error instanceof Error ? error.message : 'Internal server error' });
   }
 });
@@ -106,6 +117,7 @@ router.post('/start-decisions', (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error('Error starting decisions:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -129,6 +141,7 @@ router.post('/action', (req, res) => {
     return res.json({ success: true, state });
   } catch (error) {
     console.error('Error applying action:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -143,6 +156,7 @@ router.post('/dealer-play', (req, res) => {
     res.json({ results, state });
   } catch (error) {
     console.error('Error playing dealer hand:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -163,6 +177,61 @@ router.post('/reset', (req, res) => {
     res.json({ success: true, message: 'Game state reset to initial conditions', state });
   } catch (error) {
     console.error('Error resetting game state:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /table-talk - Generate table talk for all agents
+router.post('/table-talk', async (req, res) => {
+  try {
+    await tableState.generateTableTalkForAllAgents();
+    const state = tableState.getState();
+    eventsBroadcaster.broadcastState(); // Broadcast updated state
+    res.json({ success: true, state });
+  } catch (error) {
+    console.error('Error generating table talk:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /agent-decisions - Process all agent decisions automatically
+router.post('/agent-decisions', async (req, res) => {
+  try {
+    await tableState.processAllAgentDecisions();
+    const state = tableState.getState();
+    eventsBroadcaster.broadcastState(); // Broadcast updated state
+    res.json({ success: true, state });
+  } catch (error) {
+    console.error('Error processing agent decisions:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /play-full-hand - Automated full hand: bet -> deal -> talk -> decide -> dealer -> settle
+router.post('/play-full-hand', async (req, res) => {
+  try {
+    console.log('Starting automated full hand...');
+    
+    // Start new hand (betting phase)
+    tableState.startNewHand();
+    eventsBroadcaster.broadcastState();
+    
+    // Place bets for all agents
+    await tableState.placeBetsForAllAgents();
+    eventsBroadcaster.broadcastState();
+    
+    // Start dealing (this will automatically trigger table talk -> decisions -> dealer -> settle)
+    await tableState.startDealing();
+    eventsBroadcaster.broadcastDeal(tableState.getState().snap);
+    
+    const state = tableState.getState();
+    res.json({ success: true, message: 'Full hand automation completed', state });
+  } catch (error) {
+    console.error('Error in automated full hand:', error);
+    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
     res.status(500).json({ error: 'Internal server error' });
   }
 });

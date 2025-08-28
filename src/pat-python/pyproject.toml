@@ -9,6 +9,6 @@ dependencies = [
     "pydantic",
     "fastapi",
     "uvicorn[standard]",
-    "openai",
     "azure-identity",
+    "azure-ai-projects>=1.0.0",
 ]
