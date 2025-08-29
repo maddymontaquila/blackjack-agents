@@ -72,53 +72,148 @@ router.post('/bet', (req, res) => {
   }
 });
 
-// POST /agent-bets - Place bets for all agents
+// POST /agent-bets - Place bets for all agents - ENHANCED WITH DEBUG INFO
 router.post('/agent-bets', async (req, res) => {
   console.log('DEBUG: /agent-bets endpoint called');
   try {
     const startTime = Date.now();
+    
+    // IMMEDIATELY set the flag and broadcast so button disappears
+    console.log('DEBUG: Setting agentBettingInitiated flag and broadcasting state');
+    tableState.markAgentBettingInitiated();
+    
+    // Verify the flag is set in the state
+    const immediateState = tableState.getState();
+    console.log('DEBUG: State after setting flag:');
+    console.log('  - phase:', immediateState.status);
+    console.log('  - agentBettingInitiated:', immediateState.debug?.agentBettingInitiated);
+    console.log('  - debug object keys:', Object.keys(immediateState.debug || {}));
+    
+    eventsBroadcaster.broadcastState(); // Broadcast immediately so button disappears
+    
+    // Broadcast that betting process is starting
+    eventsBroadcaster.broadcastDebug({
+      operation: 'agent-betting',
+      status: 'starting',
+      timestamp: startTime,
+      phase: tableState.getState().status
+    });
+    
     await tableState.placeBetsForAllAgents();
     const endTime = Date.now();
     console.log(`DEBUG: placeBetsForAllAgents completed in ${endTime - startTime}ms`);
     
     const state = tableState.getState();
-    eventsBroadcaster.broadcastState(); // Broadcast updated state
+    eventsBroadcaster.broadcastState(); // Broadcast updated state again after completion
+    
+    // Broadcast completion status
+    eventsBroadcaster.broadcastDebug({
+      operation: 'agent-betting',
+      status: 'completed',
+      duration: endTime - startTime,
+      timestamp: endTime,
+      bettingCompletion: state.debug?.bettingCompletion
+    });
+    
     console.log('DEBUG: Broadcasting state and returning response');
-    return res.json({ success: true, state });
+    return res.json({ success: true, state, debug: { duration: endTime - startTime } });
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error placing agent bets:', error);
     console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
-    return res.status(500).json({ error: 'Internal server error' });
+    
+    // Broadcast error with context
+    eventsBroadcaster.broadcastErrorWithContext('Agent betting failed', {
+      phase: tableState.getState().status,
+      operation: 'agent-betting'
+    });
+    
+    return res.status(500).json({ error: 'Agent betting failed', details: errorMsg });
   }
 });
 
-// POST /start-dealing - Start dealing cards (after betting phase)
+// POST /start-dealing - Start dealing cards (after betting phase) - ENHANCED
 router.post('/start-dealing', async (req, res) => {
   try {
+    const startTime = Date.now();
+    
+    eventsBroadcaster.broadcastDebug({
+      operation: 'start-dealing',
+      status: 'starting',
+      timestamp: startTime
+    });
+    
     await tableState.startDealing();
     const state = tableState.getState();
+    const endTime = Date.now();
+    
     console.log('Cards dealt and full automation completed, handNumber:', state.snap.handNumber, 'phase:', state.status);
     console.log('Players have cards:', state.snap.players.map(p => ({ id: p.id, cardCount: p.visibleCards.length, bet: p.bet })));
     console.log('Dealer has cards:', state.dealer.cards.length);
+    
     eventsBroadcaster.broadcastDeal(state.snap); // Broadcast deal event
-    res.json({ ok: true, state });
+    eventsBroadcaster.broadcastDebug({
+      operation: 'start-dealing',
+      status: 'completed',
+      duration: endTime - startTime,
+      timestamp: endTime,
+      cardsDealt: state.snap.players.reduce((sum, p) => sum + p.visibleCards.length, 0) + state.dealer.cards.length
+    });
+    
+    res.json({ ok: true, state, debug: { duration: endTime - startTime } });
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error starting dealing:', error);
     console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Internal server error' });
+    
+    eventsBroadcaster.broadcastErrorWithContext('Dealing failed', {
+      phase: tableState.getState().status,
+      operation: 'start-dealing'
+    });
+    
+    res.status(500).json({ error: 'Dealing failed', details: errorMsg });
   }
 });
 
-// POST /start-decisions - Move to decision phase (for manual play)
-router.post('/start-decisions', (req, res) => {
+// POST /start-decisions - Start decision phase after cards are dealt
+router.post('/start-decisions', async (req, res) => {
   try {
-    tableState.startDecisionPhase();
+    const startTime = Date.now();
+    
+    eventsBroadcaster.broadcastDebug({
+      operation: 'start-decisions',
+      status: 'starting',
+      timestamp: startTime
+    });
+    
+    await tableState.startDecisionPhase();
+    const state = tableState.getState();
+    const endTime = Date.now();
+    
+    console.log('Decision phase started, handNumber:', state.snap.handNumber, 'phase:', state.status);
+    console.log('Current player index:', state.currentPlayerIndex);
+    
     eventsBroadcaster.broadcastState(); // Broadcast updated state
-    res.json({ ok: true });
+    eventsBroadcaster.broadcastDebug({
+      operation: 'start-decisions',
+      status: 'completed',
+      duration: endTime - startTime,
+      timestamp: endTime,
+      currentPlayer: state.currentPlayerIndex
+    });
+    
+    res.json({ ok: true, state, debug: { duration: endTime - startTime } });
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error starting decisions:', error);
     console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
-    res.status(500).json({ error: 'Internal server error' });
+    
+    eventsBroadcaster.broadcastErrorWithContext('Decision phase failed to start', {
+      phase: tableState.getState().status,
+      operation: 'start-decisions'
+    });
+    
+    res.status(500).json({ error: 'Decision phase failed to start', details: errorMsg });
   }
 });
 
@@ -182,31 +277,25 @@ router.post('/reset', (req, res) => {
   }
 });
 
-// POST /table-talk - Generate table talk for all agents
-router.post('/table-talk', async (req, res) => {
-  try {
-    await tableState.generateTableTalkForAllAgents();
-    const state = tableState.getState();
-    eventsBroadcaster.broadcastState(); // Broadcast updated state
-    res.json({ success: true, state });
-  } catch (error) {
-    console.error('Error generating table talk:', error);
-    console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+// Table talk endpoint removed - agents chat during betting and decisions now
 
 // POST /agent-decisions - Process all agent decisions automatically
 router.post('/agent-decisions', async (req, res) => {
   try {
-    await tableState.processAllAgentDecisions();
+    // Check if decision processing is already in progress
     const state = tableState.getState();
+    if (state.debug?.decisionProcessingInProgress) {
+      return res.status(409).json({ error: 'Agent decisions are already being processed' });
+    }
+    
+    await tableState.processAllAgentDecisions();
+    const finalState = tableState.getState();
     eventsBroadcaster.broadcastState(); // Broadcast updated state
-    res.json({ success: true, state });
+    return res.json({ success: true, state: finalState });
   } catch (error) {
     console.error('Error processing agent decisions:', error);
     console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 

@@ -25,6 +25,14 @@ export interface BackendState {
     isBusted: boolean;
   };
   currentPlayerIndex: number;
+  debug?: {
+    agentBettingInitiated?: boolean;
+    phaseStatus?: string;
+    pendingOperations?: string[];
+    agentHealthStatus?: any;
+    streamingStatus?: any;
+    lastError?: string;
+  };
 }
 
 export interface ActionResult {

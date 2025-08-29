@@ -13,6 +13,23 @@ export interface Player {
   isBusted: boolean;
   lastAction?: TAction;
   bankroll: number;
+  // Debug info
+  lastError?: string;
+  lastActivityTime?: number;
+  agentStatus?: 'idle' | 'thinking' | 'streaming' | 'error';
+}
+
+export interface DebugInfo {
+  phaseStartTime: number;
+  phaseDuration: number;
+  lastError?: string;
+  agentHealthStatus: { [seat: number]: { ok: boolean; details?: string; lastCheck: number } };
+  streamingStatus: { [seat: number]: { active: number; operations: string[] } };
+  operationLog: Array<{ timestamp: number; operation: string; seat?: number; success: boolean; duration?: number; error?: string }>;
+  pendingOperations: string[];
+  bettingCompletion: { [seat: number]: { completed: boolean; amount: number; timestamp: number } };
+  agentBettingInitiated: boolean; // Track if agent betting has been initiated
+  decisionProcessingInProgress: boolean; // Track if agent decision processing is in progress
 }
 
 export interface GameState {
@@ -25,9 +42,11 @@ export interface GameState {
   };
   players: Player[];
   chat: TChatMsg[];
-  phase: 'waiting' | 'betting' | 'dealing' | 'table-talk' | 'decisions' | 'dealer' | 'settling' | 'finished';
+  phase: 'waiting' | 'betting' | 'dealing' | 'decisions' | 'dealer' | 'settling' | 'finished';
   currentPlayerIndex: number; // For decision phase
   maxPlayers: number;
+  // Debug information
+  debug: DebugInfo;
 }
 
 export class TableState {
@@ -41,15 +60,29 @@ export class TableState {
       shoe: new Shoe(Date.now(), 4),
       dealer: { cards: [], isStanding: false, isBusted: false },
       players: [
-        { id: 'Pat Python', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Dee DotNet', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Tom TypeScript', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
+        { id: 'Pat Python', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100, agentStatus: 'idle' },
+        { id: 'Dee DotNet', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100, agentStatus: 'idle' },
+        { id: 'Tom TypeScript', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100, agentStatus: 'idle' }
       ],
       chat: [],
       phase: 'waiting',
       currentPlayerIndex: -1,
-      maxPlayers: 3
+      maxPlayers: 3,
+      debug: {
+        phaseStartTime: Date.now(),
+        phaseDuration: 0,
+        agentHealthStatus: {},
+        streamingStatus: {},
+        operationLog: [],
+        pendingOperations: [],
+        bettingCompletion: {},
+        agentBettingInitiated: false,
+        decisionProcessingInProgress: false
+      }
     };
+    
+    // Initialize debug info for all agents
+    this.updateAgentHealthStatus();
   }
 
   // Get public view of the game state
@@ -87,34 +120,62 @@ export class TableState {
 
   // Get current state info for frontend
   getState() {
+    // Update debug timing info
+    this.state.debug.phaseDuration = Date.now() - this.state.debug.phaseStartTime;
+    
     const publicSnapshot = this.getPublicSnapshot();
     return {
       snap: publicSnapshot,
       status: this.state.phase,
-      seats: this.state.players.map(p => ({ id: p.id, seat: p.seat, isActive: !p.isStanding && !p.isBusted })),
+      seats: this.state.players.map(p => ({ 
+        id: p.id, 
+        seat: p.seat, 
+        isActive: !p.isStanding && !p.isBusted,
+        agentStatus: p.agentStatus,
+        lastError: p.lastError
+      })),
       config: { maxPlayers: this.state.maxPlayers },
       dealer: {
         cards: this.state.dealer.cards,
-        visibleCards: this.state.phase === 'dealing' || this.state.phase === 'table-talk' || this.state.phase === 'decisions' 
+        visibleCards: this.state.phase === 'dealing' || this.state.phase === 'decisions' 
           ? [this.state.dealer.cards[0]] // Only show first card during play
           : this.state.dealer.cards, // Show all cards after
         isStanding: this.state.dealer.isStanding,
         isBusted: this.state.dealer.isBusted
       },
-      currentPlayerIndex: this.state.currentPlayerIndex
+      currentPlayerIndex: this.state.currentPlayerIndex,
+      // Enhanced debug information for UI
+      debug: {
+        phase: this.state.phase,
+        phaseStartTime: this.state.debug.phaseStartTime,
+        phaseDuration: this.state.debug.phaseDuration,
+        phaseStatus: this.getPhaseStatusDescription(),
+        agentHealthStatus: this.state.debug.agentHealthStatus,
+        streamingStatus: this.state.debug.streamingStatus,
+        pendingOperations: this.state.debug.pendingOperations,
+        bettingCompletion: this.state.debug.bettingCompletion,
+        agentBettingInitiated: this.state.debug.agentBettingInitiated,
+        decisionProcessingInProgress: this.state.debug.decisionProcessingInProgress,
+        recentOperations: this.state.debug.operationLog.slice(-5), // Last 5 operations
+        lastError: this.state.debug.lastError
+      }
     };
   }
 
   // Start a new hand
   startNewHand(): void {
+    const operationId = `start-hand-${Date.now()}`;
+    this.logOperation(operationId, 'Starting new hand', undefined, true);
+    
     // Reset state for new hand
     this.state.handNumber++;
-    this.state.phase = 'betting'; // Start with betting phase
+    this.setPhase('betting');
     this.state.currentPlayerIndex = -1;
     
     // Reset shoe with new seed if needed
     if (this.state.shoe.getCardsRemaining() < 20) {
       this.state.shoe.reset(4);  // Reset with 4 decks
+      this.logOperation(operationId + '-shoe', 'Reset shoe with 4 decks', undefined, true);
     }
     
     // Reset dealer
@@ -129,10 +190,22 @@ export class TableState {
       player.isStanding = false;
       player.isBusted = false;
       player.lastAction = undefined;
+      player.lastError = undefined;
+      player.agentStatus = 'idle';
+      player.lastActivityTime = Date.now();
     });
     
     // Clear chat for new hand
     this.state.chat = [];
+    
+    // Reset debug info for new hand
+    this.state.debug.bettingCompletion = {};
+    this.state.debug.pendingOperations = [];
+    this.state.debug.lastError = undefined;
+    this.state.debug.agentBettingInitiated = false; // Reset for new hand
+    this.state.debug.decisionProcessingInProgress = false; // Reset for new hand
+    
+    this.logOperation(operationId, 'New hand started successfully', undefined, true, Date.now() - parseInt(operationId.split('-')[2]));
   }
 
   // Place a bet for a player
@@ -170,31 +243,47 @@ export class TableState {
     return true;
   }
 
-  // Place bet for an agent player
+  // Place bet for an agent player - ENHANCED WITH BETTER TRACKING
   async placeBetForAgent(seat: number): Promise<void> {
+    const operationId = `bet-${seat}-${Date.now()}`;
+    this.addPendingOperation(operationId);
+    
     if (this.state.phase !== 'betting') {
+      this.removePendingOperation(operationId);
       throw new Error('Not in betting phase');
     }
 
     const player = this.state.players.find(p => p.seat === seat);
     if (!player) {
+      this.removePendingOperation(operationId);
       throw new Error(`Player at seat ${seat} not found`);
     }
 
     const agentClient = this.agentClients.get(seat);
     if (!agentClient) {
       console.log(`DEBUG: No agent client configured for seat ${seat} (${player.id}) - skipping automated betting (manual betting allowed)`);
-      return; // Skip this seat - allow manual betting
+      this.removePendingOperation(operationId);
+      // Mark as "completed" for manual players
+      this.state.debug.bettingCompletion[seat] = { completed: true, amount: 0, timestamp: Date.now() };
+      return;
     }
 
+    const startTime = Date.now();
+    player.agentStatus = 'thinking';
+    this.updateStreamingStatus();
+    
     try {
       console.log(`DEBUG: Starting bet placement for ${player.id} at seat ${seat}`);
       console.log(`DEBUG: Player bankroll: ${player.bankroll}, hand number: ${this.state.handNumber}`);
       
-      // Call agent's place_bet method with streaming
+      // Call agent's place_bet method with streaming - WAIT FOR COMPLETION
       console.log(`DEBUG: Calling placeBetStreaming for ${player.id}...`);
-      const startTime = Date.now();
+      player.agentStatus = 'streaming';
       const betResult = await agentClient.placeBetStreaming(player.bankroll, this.state.handNumber);
+      
+      // WAIT for any ongoing streaming to complete
+      await agentClient.waitForStreamingCompletion();
+      
       const endTime = Date.now();
       console.log(`DEBUG: placeBetStreaming completed for ${player.id} in ${endTime - startTime}ms`);
       
@@ -203,28 +292,69 @@ export class TableState {
         // The rationale was already streamed via WebSocket, just add to chat
         this.addChatMessage(player.id, betResult.rationale);
         console.log(`DEBUG: Bet placed successfully for ${player.id}: $${betResult.bet_amount}`);
+        
+        // Mark betting as completed
+        this.state.debug.bettingCompletion[seat] = { 
+          completed: true, 
+          amount: betResult.bet_amount, 
+          timestamp: Date.now() 
+        };
+        
+        this.logOperation(operationId, `Bet placed: $${betResult.bet_amount}`, seat, true, endTime - startTime);
       } else {
         // Fallback to minimum bet if agent's bet was invalid
         this.placeBet(seat, 5);
         this.addChatMessage(player.id, "Oops, betting logic failed - going minimum!");
         console.log(`DEBUG: Fallback minimum bet placed for ${player.id}`);
+        
+        this.state.debug.bettingCompletion[seat] = { 
+          completed: true, 
+          amount: 5, 
+          timestamp: Date.now() 
+        };
+        
+        this.logOperation(operationId, 'Fallback bet: $5', seat, false, endTime - startTime, 'Invalid bet amount from agent');
       }
+      
+      player.agentStatus = 'idle';
+      player.lastActivityTime = Date.now();
+      
     } catch (error) {
       // Emergency fallback - place minimum bet
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       console.error(`Error in placeBetForAgent for seat ${seat} (${player.id}):`, error);
       console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
+      
+      player.lastError = errorMsg;
+      player.agentStatus = 'error';
+      
       this.placeBet(seat, 5);
-      this.addChatMessage(player.id, "My betting circuits are fried - minimum bet it is!");
+      this.addChatMessage(player.id, `❌ ERROR: ${errorMsg.substring(0, 100)}... (bet $5 fallback)`);
+      
+      // Still mark as completed to not block game flow
+      this.state.debug.bettingCompletion[seat] = { 
+        completed: true, 
+        amount: 5, 
+        timestamp: Date.now() 
+      };
+      
+      this.logOperation(operationId, 'Emergency fallback bet: $5', seat, false, Date.now() - startTime, errorMsg);
+    } finally {
+      this.removePendingOperation(operationId);
+      this.updateStreamingStatus();
     }
   }
 
-  // Place bets for all agent players
+  // Place bets for all agent players - SEQUENTIAL WITH PROPER COMPLETION TRACKING
   async placeBetsForAllAgents(): Promise<void> {
     console.log('DEBUG: placeBetsForAllAgents() called');
     
     if (this.state.phase !== 'betting') {
       throw new Error('Not in betting phase');
     }
+
+    // Flag should already be set by endpoint before calling this method
+    console.log('DEBUG: placeBetsForAllAgents called, agentBettingInitiated should already be true:', this.state.debug.agentBettingInitiated);
 
     const agentSeats = Array.from(this.agentClients.keys());
     console.log(`DEBUG: Starting betting for ${agentSeats.length} agents: seats ${agentSeats.join(', ')}`);
@@ -233,23 +363,74 @@ export class TableState {
     
     if (agentSeats.length === 0) {
       console.log('DEBUG: No agent clients configured - only manual betting available');
-      return;
+      return; // Flag already set by endpoint
     }
     
     const startTime = Date.now();
     
-    // Place bets for all agents in parallel and wait for all to complete
+    // Place bets SEQUENTIALLY to avoid race conditions with streaming
+    for (const seat of agentSeats) {
+      try {
+        console.log(`DEBUG: Processing betting for seat ${seat}`);
+        await this.placeBetForAgent(seat);
+        
+        // Small delay between agents to ensure UI updates properly
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Broadcast state after each agent completes
+        eventsBroadcaster.broadcastState();
+      } catch (error) {
+        console.error(`DEBUG: Error processing bet for seat ${seat}:`, error);
+        // Continue with next agent even if one fails
+      }
+    }
+    
+    // Final wait to ensure all streaming operations have fully completed
+    console.log('DEBUG: Waiting for all streaming operations to complete...');
     await Promise.all(
-      agentSeats.map(seat => this.placeBetForAgent(seat))
+      agentSeats.map(async seat => {
+        const client = this.agentClients.get(seat);
+        if (client) {
+          await client.waitForStreamingCompletion();
+        }
+      })
     );
     
     const endTime = Date.now();
     console.log(`DEBUG: All agent bets completed in ${endTime - startTime}ms`);
+    
+    // Additional delay to ensure WebSocket updates reach frontend
+    console.log('DEBUG: Adding final delay for WebSocket synchronization...');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    this.logOperation(`all-bets-${startTime}`, 'All agent betting completed', undefined, true, endTime - startTime);
   }
 
-  // Check if all players have placed valid bets
+  // Check if all players have placed valid bets - IMPROVED WITH AGENT TRACKING
   allPlayersHaveBet(): boolean {
-    return this.state.players.every(player => player.bet >= 5);
+    const agentSeats = Array.from(this.agentClients.keys());
+    
+    // For automated players (agents), check if they completed betting process
+    for (const seat of agentSeats) {
+      const completion = this.state.debug.bettingCompletion[seat];
+      if (!completion || !completion.completed || completion.amount < 5) {
+        console.log(`allPlayersHaveBet: Agent at seat ${seat} has not completed betting (${completion ? completion.amount : 'no bet'})`);
+        return false;
+      }
+    }
+    
+    // For manual players, check if they have valid bets
+    for (const player of this.state.players) {
+      if (!agentSeats.includes(player.seat)) {
+        if (player.bet < 5) {
+          console.log(`allPlayersHaveBet: Manual player ${player.id} needs to place bet (current: ${player.bet})`);
+          return false;
+        }
+      }
+    }
+    
+    console.log(`allPlayersHaveBet: All players have valid bets`);
+    return true;
   }
 
   // Start dealing (move from betting to dealing phase)
@@ -259,9 +440,9 @@ export class TableState {
     }
 
     console.log('Starting dealing phase - all bets are placed');
-    this.state.phase = 'dealing';
+    this.setPhase('dealing');
     
-    // Deal initial cards (this will automatically progress through table-talk to decisions)
+    // Deal initial cards and stop - frontend will trigger decision phase separately
     await this.dealInitialCards();
   }
 
@@ -290,24 +471,9 @@ export class TableState {
       }
     });
     
-    // Move to table talk phase and automatically generate table talk
-    this.state.phase = 'table-talk';
-    
-    // Automatically generate table talk for all agents and wait for completion
-    console.log('Starting table talk generation...');
-    try {
-      await this.generateTableTalkForAllAgents();
-      console.log('Table talk generation completed, moving to decisions');
-      eventsBroadcaster.broadcastState();
-      
-      // After table talk, automatically move to decisions phase
-      await this.startDecisionPhase();
-    } catch (error) {
-      console.error('Error during automatic table talk generation:', error);
-      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
-      // Still move to decisions even if table talk fails
-      await this.startDecisionPhase();
-    }
+    // Cards are dealt - stay in dealing phase, wait for frontend to trigger decisions
+    console.log('Cards dealt successfully. Waiting for frontend to start decision phase.');
+    this.logOperation('deal-cards', 'Initial cards dealt to all players and dealer', undefined, true);
   }
 
   // Add chat message
@@ -317,7 +483,13 @@ export class TableState {
 
   // Start decision phase
   async startDecisionPhase(): Promise<void> {
-    this.state.phase = 'decisions';
+    // Guard against multiple calls
+    if (this.state.phase === 'decisions') {
+      console.log('Decision phase already started - ignoring duplicate call');
+      return;
+    }
+    
+    this.setPhase('decisions');
     this.state.currentPlayerIndex = -1; // Start before first player
     this.findNextActivePlayer();
     
@@ -410,7 +582,7 @@ export class TableState {
     
     // No more active players, move to dealer phase and automatically play
     this.state.currentPlayerIndex = -1;
-    this.state.phase = 'dealer';
+    this.setPhase('dealer');
     
     // Automatically play dealer hand
     this.playDealerHand();
@@ -440,7 +612,7 @@ export class TableState {
     }
     
     this.state.dealer.isStanding = true;
-    this.state.phase = 'settling';
+    this.setPhase('settling');
   }
 
   // Settle all hands and calculate results
@@ -471,7 +643,7 @@ export class TableState {
       results.push({ seat: player.seat, result, payout });
     }
     
-    this.state.phase = 'finished';
+    this.setPhase('finished');
     return results;
   }
 
@@ -512,15 +684,30 @@ export class TableState {
       shoe: new Shoe(Date.now(), 4),
       dealer: { cards: [], isStanding: false, isBusted: false },
       players: [
-        { id: 'Pat Python', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Dee DotNet', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 },
-        { id: 'Tom TypeScript', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100 }
+        { id: 'Pat Python', seat: 0, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100, agentStatus: 'idle' },
+        { id: 'Dee DotNet', seat: 1, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100, agentStatus: 'idle' },
+        { id: 'Tom TypeScript', seat: 2, cards: [], bet: 0, isStanding: false, isBusted: false, bankroll: 100, agentStatus: 'idle' }
       ],
       chat: [],
       phase: 'waiting',
       currentPlayerIndex: -1,
-      maxPlayers: 3
+      maxPlayers: 3,
+      debug: {
+        phaseStartTime: Date.now(),
+        phaseDuration: 0,
+        agentHealthStatus: {},
+        streamingStatus: {},
+        operationLog: [],
+        pendingOperations: [],
+        bettingCompletion: {},
+        agentBettingInitiated: false,
+        decisionProcessingInProgress: false
+      }
     };
+    
+    // Re-initialize agent health status
+    this.updateAgentHealthStatus();
+    this.logOperation('reset-game', 'Complete game reset', undefined, true);
   }
 
   // Generate agent IO for a specific player
@@ -556,43 +743,13 @@ export class TableState {
     };
   }
 
-  // Generate table talk for all agents
-  async generateTableTalkForAllAgents(): Promise<void> {
-    if (this.state.phase !== 'table-talk') {
-      throw new Error('Not in table-talk phase');
-    }
+  // Table talk methods removed - agents now chat during betting and decisions instead
 
-    const agentSeats = Array.from(this.agentClients.keys());
-    
-    // Generate table talk for all agents in parallel
-    await Promise.all(
-      agentSeats.map(seat => this.generateTableTalkForAgent(seat))
-    );
-  }
-
-  // Generate table talk for a specific agent
-  async generateTableTalkForAgent(seat: number): Promise<void> {
-    const player = this.state.players.find(p => p.seat === seat);
-    if (!player) {
-      throw new Error(`Player at seat ${seat} not found`);
-    }
-
-    const agentClient = this.agentClients.get(seat);
-    if (!agentClient) {
-      throw new Error(`No agent client configured for seat ${seat}`);
-    }
-
-    try {
-      const agentIO = this.buildAgentIO(seat, 'table-talk');
-      const talkResult = await agentClient.talkStreaming(agentIO);
-      
-      // The rationale was already streamed via WebSocket, just add to chat
-      this.addChatMessage(player.id, talkResult.say);
-    } catch (error) {
-      console.error(`Error generating table talk for ${player.id} at seat ${seat}:`, error);
-      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace available');
-      this.addChatMessage(player.id, "My chat circuits are on the fritz!");
-    }
+  // Mark agent betting as initiated (for button state management)
+  markAgentBettingInitiated(): void {
+    this.state.debug.agentBettingInitiated = true;
+    this.logOperation('agent-betting-initiated', 'Agent betting initiated - button should disappear', undefined, true);
+    console.log('DEBUG: agentBettingInitiated flag set to true');
   }
 
   // Make decision for an agent player
@@ -633,18 +790,132 @@ export class TableState {
       throw new Error('Not in decisions phase');
     }
 
-    // Process decisions one by one for current active player
-    while (this.state.phase === 'decisions' && this.state.currentPlayerIndex >= 0) {
-      const currentSeat = this.state.currentPlayerIndex;
-      const agentClient = this.agentClients.get(currentSeat);
-      
-      if (agentClient) {
-        // This is an agent, make automatic decision
-        await this.makeDecisionForAgent(currentSeat);
-      } else {
-        // This is a manual player, break and wait for manual input
-        break;
+    // Guard against concurrent decision processing
+    if (this.state.debug.decisionProcessingInProgress) {
+      console.log('Agent decision processing already in progress - ignoring duplicate call');
+      return;
+    }
+
+    // Mark as in progress
+    this.state.debug.decisionProcessingInProgress = true;
+    
+    try {
+      // Process decisions one by one for current active player
+      while (this.state.phase === 'decisions' && this.state.currentPlayerIndex >= 0) {
+        const currentSeat = this.state.currentPlayerIndex;
+        const agentClient = this.agentClients.get(currentSeat);
+        
+        if (agentClient) {
+          // This is an agent, make automatic decision
+          await this.makeDecisionForAgent(currentSeat);
+        } else {
+          // This is a manual player, break and wait for manual input
+          break;
+        }
       }
+    } finally {
+      // Always reset the flag, even if there was an error
+      this.state.debug.decisionProcessingInProgress = false;
+    }
+  }
+
+  // HELPER METHODS FOR DEBUG TRACKING
+  private setPhase(newPhase: GameState['phase']): void {
+    const oldPhase = this.state.phase;
+    this.state.phase = newPhase;
+    this.state.debug.phaseStartTime = Date.now();
+    this.state.debug.phaseDuration = 0;
+    
+    console.log(`PHASE TRANSITION: ${oldPhase} -> ${newPhase}`);
+    this.logOperation(`phase-${Date.now()}`, `Phase transition: ${oldPhase} -> ${newPhase}`, undefined, true);
+  }
+
+  private logOperation(id: string, operation: string, seat?: number, success: boolean = true, duration?: number, error?: string): void {
+    const logEntry = {
+      timestamp: Date.now(),
+      operation,
+      seat,
+      success,
+      duration,
+      error
+    };
+    
+    this.state.debug.operationLog.push(logEntry);
+    
+    // Keep only last 20 operations to prevent memory bloat
+    if (this.state.debug.operationLog.length > 20) {
+      this.state.debug.operationLog = this.state.debug.operationLog.slice(-20);
+    }
+    
+    if (!success && error) {
+      this.state.debug.lastError = error;
+    }
+    
+    console.log(`OPERATION LOG: [${success ? 'SUCCESS' : 'FAILED'}] ${operation} ${seat !== undefined ? `(seat ${seat})` : ''} ${duration ? `(${duration}ms)` : ''} ${error ? `ERROR: ${error}` : ''}`);
+  }
+
+  private addPendingOperation(operationId: string): void {
+    this.state.debug.pendingOperations.push(operationId);
+    console.log(`PENDING OPS: Added ${operationId}. Total: ${this.state.debug.pendingOperations.length}`);
+  }
+
+  private removePendingOperation(operationId: string): void {
+    const index = this.state.debug.pendingOperations.indexOf(operationId);
+    if (index > -1) {
+      this.state.debug.pendingOperations.splice(index, 1);
+    }
+    console.log(`PENDING OPS: Removed ${operationId}. Total: ${this.state.debug.pendingOperations.length}`);
+  }
+
+  private async updateAgentHealthStatus(): Promise<void> {
+    const healthPromises = Array.from(this.agentClients.entries()).map(async ([seat, client]) => {
+      try {
+        const health = await client.healthCheck();
+        this.state.debug.agentHealthStatus[seat] = {
+          ok: health.ok,
+          details: health.details,
+          lastCheck: Date.now()
+        };
+      } catch (error) {
+        this.state.debug.agentHealthStatus[seat] = {
+          ok: false,
+          details: error instanceof Error ? error.message : 'Health check failed',
+          lastCheck: Date.now()
+        };
+      }
+    });
+    
+    await Promise.all(healthPromises);
+  }
+
+  private updateStreamingStatus(): void {
+    Array.from(this.agentClients.entries()).forEach(([seat, client]) => {
+      this.state.debug.streamingStatus[seat] = client.getStreamingStatus();
+    });
+  }
+
+  private getPhaseStatusDescription(): string {
+    const { phase } = this.state;
+    const agentSeats = Array.from(this.agentClients.keys());
+    
+    switch (phase) {
+      case 'waiting':
+        return 'Ready to start new hand';
+      case 'betting':
+        const completedBets = Object.values(this.state.debug.bettingCompletion).filter(c => c.completed).length;
+        return `Betting phase: ${completedBets}/${agentSeats.length} agents completed. Pending: ${this.state.debug.pendingOperations.length} operations`;
+      case 'dealing':
+        return 'Dealing initial cards';
+      case 'decisions':
+        return `Decision phase: Player ${this.state.currentPlayerIndex} to act`;
+      case 'dealer':
+        return 'Dealer playing hand';
+      case 'settling':
+        return 'Settling bets and payouts';
+      case 'finished':
+        return 'Hand complete';
+      default:
+        return `Unknown phase: ${phase}`;
     }
   }
 }

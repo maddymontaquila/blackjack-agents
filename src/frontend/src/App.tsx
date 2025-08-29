@@ -37,6 +37,14 @@ export interface UIGameState {
   handNumber: number;
   results: Array<{ seat: number; result: 'win' | 'lose' | 'push'; payout: number }>;
   chatMessages: Array<{ from: string; text: string }>;
+  debug?: {
+    agentBettingInitiated?: boolean;
+    phaseStatus?: string;
+    pendingOperations?: string[];
+    agentHealthStatus?: any;
+    streamingStatus?: any;
+    lastError?: string;
+  };
 }
 
 // Convert backend state to UI state
@@ -80,7 +88,8 @@ function convertBackendState(backendState: BackendState): UIGameState {
     gamePhase: backendState.status,
     handNumber: backendState.snap.handNumber,
     results: [],
-    chatMessages: backendState.snap.chat
+    chatMessages: backendState.snap.chat,
+    debug: backendState.debug
   };
 }
 
@@ -797,7 +806,7 @@ function App() {
             </button>
           )}
         </div>
-        {isBettingPhase && (
+        {isBettingPhase && !gameState.debug?.agentBettingInitiated && (
           <div className="betting-phase-controls">
             <button 
               className="agent-bet-button" 
