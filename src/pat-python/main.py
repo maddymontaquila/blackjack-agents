@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
 
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
 # Pat's personality and betting constants
 PAT_PERSONALITY = "funny, lighthearted, dramatic, and slightly sarcastic blackjack player"
 VALID_ACTIONS = ["hit", "stand"]
@@ -78,7 +80,7 @@ class AzureAIFoundryClient:
                 credential=DefaultAzureCredential()
             )
             # Get an authenticated OpenAI client from the project
-            self.openai_client = self.project_client.get_openai_client(api_version="2024-10-21")
+            self.openai_client = self.project_client.get_openai_client(api_version="2025-01-01-preview")
         else:
             print("Azure AI Foundry client disabled - using fallback responses")
     
@@ -108,11 +110,13 @@ class AzureAIFoundryClient:
                 # We need the project name - this might need to be configured separately
                 project_name = os.getenv("FOUNDRY_PROJECT_NAME", "default")
                 self.endpoint = f"{base_endpoint}/api/projects/{project_name}"
+                print(self.endpoint)
             else:
                 self.endpoint = parts.get('Endpoint')
                 
-            self.deployment_name = parts.get('DeploymentId') or parts.get('Model', 'gpt-4o-mini')
-            
+            # self.deployment_name = parts.get('DeploymentId') or parts.get('Model', 'gpt-4o-mini')
+            self.deployment_name = 'PatLLM'
+
             if not self.endpoint:
                 print("Error: No endpoint found in connection string")
                 return False
@@ -161,7 +165,7 @@ Return ONLY the comment text, no quotes or JSON."""
             return comment[:160]  # Ensure max length
             
         except Exception as e:
-            print(f"Azure talk generation failed (this is normal): {e}")
+            print(f"Azure talk generation failed: {e}")
             return None
     
     async def generate_decision(self, game_context: dict) -> Optional[dict]:
@@ -454,6 +458,8 @@ async def root():
     }
 
 print("FastAPI app setup complete - Pure Agent API mode")
+
+FastAPIInstrumentor.instrument_app(app)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))

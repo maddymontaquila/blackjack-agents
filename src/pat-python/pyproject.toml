@@ -12,4 +12,5 @@ dependencies = [
     "azure-identity",
     "azure-ai-projects>=1.0.0",
     "openai",
+    "opentelemetry-instrumentation-fastapi>=0.58b0",
 ]
