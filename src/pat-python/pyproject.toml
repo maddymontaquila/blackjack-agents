@@ -11,4 +11,5 @@ dependencies = [
     "uvicorn[standard]",
     "azure-identity",
     "azure-ai-projects>=1.0.0",
+    "openai",
 ]

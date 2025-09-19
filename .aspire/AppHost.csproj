@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <Sdk Name="Aspire.AppHost.Sdk" Version="9.5.0-preview.1.25467.6" />
+  <Sdk Name="Aspire.AppHost.Sdk" Version="9.6.0-preview.1.25468.38" />
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -11,8 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.5.0-preview.1.25467.6" />
-    <PackageReference Include="Aspire.Hosting.Azure.AIFoundry" Version="9.5.0-preview.1.25467.6" />
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.6.0-preview.1.25468.38" />
+    <PackageReference Include="Aspire.Hosting.Azure.AIFoundry" Version="9.6.0-preview.1.25468.38" />
     <PackageReference Include="CommunityToolkit.Aspire.Hosting.NodeJS.Extensions" Version="9.7.1-beta.348" />
     <PackageReference Include="CommunityToolkit.Aspire.Hosting.Python.Extensions" Version="9.7.1-beta.348" />
   </ItemGroup>

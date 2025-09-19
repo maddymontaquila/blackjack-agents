@@ -63,7 +63,11 @@ class EventsBroadcaster {
     
     try {
       const connectedClients = Array.from(this.wss.clients).filter(client => client.readyState === WebSocket.OPEN);
-      console.log(`Broadcasting ${message.type} to ${connectedClients.length} connected clients`);
+      
+      // Only log debug broadcasts when there are actually connected clients, or log other message types normally
+      if (message.type !== 'debug' || connectedClients.length > 0) {
+        console.log(`Broadcasting ${message.type} to ${connectedClients.length} connected clients`);
+      }
       
       if (message.type === 'state') {
         // Special logging for state messages to debug button issue
@@ -77,7 +81,8 @@ class EventsBroadcaster {
         this.sendToClient(client, message);
       });
       
-      if (connectedClients.length === 0) {
+      // Only warn about no clients for non-debug messages (debug happens every 2s)
+      if (connectedClients.length === 0 && message.type !== 'debug') {
         console.warn('No connected WebSocket clients to receive broadcast:', message.type);
       }
     } catch (error) {
