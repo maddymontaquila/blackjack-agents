@@ -97,12 +97,10 @@ function convertBackendState(backendState: BackendState): UIGameState {
 
 function ChatBubble({ 
   message, 
-  isTyping = false, 
-  playerName 
+  isTyping = false 
 }: { 
   message?: string; 
   isTyping?: boolean;
-  playerName: string;
 }) {
   const [displayText, setDisplayText] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -354,7 +352,6 @@ function PlayerHand({
       <ChatBubble 
         message={player.currentMessage}
         isTyping={player.isTyping}
-        playerName={player.name}
       />
       
       {player.bet > 0 && !isBettingPhase && (
@@ -559,6 +556,21 @@ function App() {
               return { ...prev, chatMessages: newChatMessages };
             });
           }
+        });
+
+        // Listen for individual card dealing animations
+        backendClient.addEventListener('card-dealt', (data) => {
+          if (data.recipient && data.seat !== undefined) {
+            console.log(`Card dealt animation: ${data.recipient} seat ${data.seat} card ${data.card} position ${data.cardPosition}`);
+            // The state update will come via the regular 'state' event
+            // This event could trigger additional animations or sounds
+          }
+        });
+
+        // Listen for dealing completion
+        backendClient.addEventListener('dealing-complete', () => {
+          console.log('Card dealing animation sequence completed');
+          // Could trigger a completion sound or other visual feedback
         });
         
       } catch (err) {

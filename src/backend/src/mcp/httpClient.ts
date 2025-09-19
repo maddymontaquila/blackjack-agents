@@ -162,7 +162,9 @@ export class AgentClient {
     return this.agentCall('/place_bet', { bankroll, handNumber }, this.timeouts.bet, BetOut);
   }
 
-  // talk() method removed - agents now chat during betting and decisions
+  async talk(io: TAgentIO): Promise<TTalkOut> {
+    return this.agentCall('/table_talk', io, this.timeouts.talk, TalkOut);
+  }
 
   async decide(io: TAgentIO): Promise<TDecisionOut> {
     return this.agentCall('/decide', io, this.timeouts.decide, DecisionOut);
@@ -174,7 +176,10 @@ export class AgentClient {
     return this.streamingAgentCall('/place_bet', { bankroll, handNumber }, this.timeouts.bet, BetOut, this.playerName);
   }
 
-  // talkStreaming() method removed - agents now chat during betting and decisions
+  async talkStreaming(io: TAgentIO): Promise<TTalkOut> {
+    if (!this.playerName) throw new Error('Player name required for streaming');
+    return this.streamingAgentCall('/table_talk', io, this.timeouts.talk, TalkOut, this.playerName);
+  }
 
   async decideStreaming(io: TAgentIO): Promise<TDecisionOut> {
     if (!this.playerName) throw new Error('Player name required for streaming');

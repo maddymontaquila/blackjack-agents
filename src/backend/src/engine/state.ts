@@ -447,33 +447,63 @@ export class TableState {
   }
 
   private async dealInitialCards(): Promise<void> {
-    // Deal 2 cards to each player, then dealer
+    console.log('Starting animated card dealing...');
+    
+    // Deal 2 rounds of cards with smooth animation
     for (let round = 0; round < 2; round++) {
-      // Deal to players
-      for (const player of this.state.players) {
+      console.log(`Dealing round ${round + 1}/2...`);
+      
+      // Deal to players first, one at a time
+      for (let i = 0; i < this.state.players.length; i++) {
+        const player = this.state.players[i];
         const card = this.state.shoe.draw();
         if (card !== null) {
           player.cards.push(card);
+          console.log(`Dealt card ${card} to ${player.id} (seat ${player.seat}), position ${round}`);
+          
+          // Broadcast individual card dealing event
+          eventsBroadcaster.broadcastCardDealt('player', player.seat, card, round);
+          eventsBroadcaster.broadcastState(); // Update state after each card
+          
+          // Small delay between each card for smooth animation
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
       }
       
-      // Deal to dealer
+      // Deal to dealer last in each round
       const dealerCard = this.state.shoe.draw();
       if (dealerCard !== null) {
         this.state.dealer.cards.push(dealerCard);
+        console.log(`Dealt card ${dealerCard} to Dealer, position ${round}`);
+        
+        // For dealer, only show first card (hide second card)
+        const showCard = round === 0;
+        eventsBroadcaster.broadcastCardDealt('dealer', undefined, showCard ? dealerCard : undefined, round);
+        eventsBroadcaster.broadcastState(); // Update state after dealer card
+        
+        // Longer delay after dealer card to build suspense
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
     
-    // Check for immediate blackjacks or busts
+    // Check for immediate blackjacks
     this.state.players.forEach(player => {
       if (isBlackjack(player.cards)) {
         player.isStanding = true;
+        console.log(`${player.id} has blackjack!`);
       }
     });
     
-    // Cards are dealt - stay in dealing phase, wait for frontend to trigger decisions
-    console.log('Cards dealt successfully. Waiting for frontend to start decision phase.');
-    this.logOperation('deal-cards', 'Initial cards dealt to all players and dealer', undefined, true);
+    // Broadcast that dealing is complete
+    eventsBroadcaster.broadcastDealingComplete();
+    eventsBroadcaster.broadcastState(); // Final state update
+    
+    console.log('Animated card dealing completed');
+    this.logOperation('deal-cards-animated', 'Animated cards dealt to all players and dealer', undefined, true);
+    
+    // After dealing is complete, get agent commentary on their hands
+    console.log('Starting agent commentary on dealt hands...');
+    await this.gatherAgentCommentary();
   }
 
   // Add chat message
@@ -741,6 +771,58 @@ export class TableState {
       public: publicSnapshot,
       me: privateInfo
     };
+  }
+
+  // Gather commentary from all agents about their dealt hands
+  async gatherAgentCommentary(): Promise<void> {
+    const agentSeats = Array.from(this.agentClients.keys());
+    
+    if (agentSeats.length === 0) {
+      console.log('No agents to provide commentary');
+      return;
+    }
+    
+    console.log(`Gathering commentary from ${agentSeats.length} agents...`);
+    
+    // Get commentary from each agent sequentially
+    for (const seat of agentSeats) {
+      try {
+        const player = this.state.players.find(p => p.seat === seat);
+        if (!player) continue;
+        
+        const agentClient = this.agentClients.get(seat);
+        if (!agentClient) continue;
+        
+        console.log(`Getting commentary from ${player.id} at seat ${seat}...`);
+        
+        // Build agent IO for table talk
+        const agentIO = this.buildAgentIO(seat, 'table-talk');
+        
+        // Get streaming commentary
+        const talkResult = await agentClient.talkStreaming(agentIO);
+        
+        // Add to chat (rationale was already streamed via WebSocket)
+        this.addChatMessage(player.id, talkResult.say);
+        
+        console.log(`Commentary received from ${player.id}: ${talkResult.say}`);
+        
+        // Small delay between agents for better UX
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+      } catch (error) {
+        console.error(`Error getting commentary from seat ${seat}:`, error);
+        const player = this.state.players.find(p => p.seat === seat);
+        if (player) {
+          this.addChatMessage(player.id, "😵 My commentary circuits are offline!");
+        }
+      }
+    }
+    
+    console.log('Agent commentary gathering completed');
+    this.logOperation('agent-commentary', 'Agent commentary on dealt hands completed', undefined, true);
+    
+    // Final state broadcast after all commentary
+    eventsBroadcaster.broadcastState();
   }
 
   // Table talk methods removed - agents now chat during betting and decisions instead

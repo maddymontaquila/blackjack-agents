@@ -510,8 +510,49 @@
   transition: transform 0.2s ease;
 }
 
+/* Card dealing animation states */
+.playing-card.card-dealing {
+  animation: cardDeal 0.5s ease-out forwards;
+  transform: translateY(-50px) rotateY(180deg);
+  opacity: 0;
+}
+
+.playing-card.card-flip {
+  animation: cardFlip 0.6s ease-in-out forwards;
+}
+
+/* Keyframe animations for card dealing */
+@keyframes cardDeal {
+  0% {
+    transform: translateY(-50px) rotateY(180deg) scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: translateY(-10px) rotateY(90deg) scale(1.1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateY(0) rotateY(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes cardFlip {
+  0% {
+    transform: rotateY(0deg);
+  }
+  50% {
+    transform: rotateY(90deg) scale(1.1);
+  }
+  100% {
+    transform: rotateY(0deg) scale(1);
+  }
+}
+
+/* Enhanced hover effect */
 .playing-card:hover {
-  transform: translateY(-4px);
+  transform: translateY(-4px) scale(1.05);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
 }
 
 .playing-card.red {

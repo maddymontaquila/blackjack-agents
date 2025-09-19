@@ -3,7 +3,7 @@ import { Server } from 'http';
 import { tableState } from './http.js';
 
 interface WebSocketMessage {
-  type: 'deal' | 'chat' | 'action' | 'dealer' | 'settle' | 'error' | 'state' | 'player-typing' | 'chat-stream' | 'chat-message' | 'debug';
+  type: 'deal' | 'chat' | 'action' | 'dealer' | 'settle' | 'error' | 'state' | 'player-typing' | 'chat-stream' | 'chat-message' | 'debug' | 'card-dealt' | 'dealing-complete';
   [key: string]: any;
 }
 
@@ -182,6 +182,25 @@ class EventsBroadcaster {
     const connected = Array.from(this.wss.clients).filter(client => client.readyState === WebSocket.OPEN).length;
     
     return { connected, total };
+  }
+
+  // New methods for animated card dealing
+  broadcastCardDealt(recipient: 'player' | 'dealer', seat?: number, card?: number, cardPosition?: number) {
+    this.broadcast({ 
+      type: 'card-dealt', 
+      recipient,
+      seat, 
+      card,
+      cardPosition,
+      timestamp: Date.now()
+    });
+  }
+
+  broadcastDealingComplete() {
+    this.broadcast({ 
+      type: 'dealing-complete',
+      timestamp: Date.now()
+    });
   }
 }
 
